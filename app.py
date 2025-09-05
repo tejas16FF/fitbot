@@ -29,7 +29,7 @@ embeddings = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=OPE
 llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=OPENAI_KEY)
 
 # load KB
-kb_path = "data/fitness.txt"
+kb_path = "data.txt"
 if not os.path.exists(kb_path):
     st.error(f"Knowledge base missing: {kb_path}")
     st.stop()
