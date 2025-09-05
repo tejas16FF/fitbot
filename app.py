@@ -1,53 +1,68 @@
 # app.py
 import os
-from dotenv import load_dotenv
-load_dotenv()  # load .env into environment
-
-# Short debug print (optional) — remove after verifying
-# print("DEBUG: OPENAI_API_KEY present:", bool(os.getenv("OPENAI_API_KEY")))
-
 import streamlit as st
+from dotenv import load_dotenv
 
-# import langchain OpenAI wrappers
+# Load .env file (for OPENAI_API_KEY)
+load_dotenv()
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+
+# Safety check
+if not OPENAI_KEY:
+    st.error("❌ OpenAI API key not found. Please set it in .env as OPENAI_API_KEY")
+    st.stop()
+
+# ---- LangChain & OpenAI imports ----
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain.vectorstores import FAISS
+from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
 
-# get key
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_KEY:
-    st.error("OpenAI API key not found. Add it to .env as OPENAI_API_KEY and restart.")
-    st.stop()
-
-# UI
+# ---- Streamlit UI ----
 st.set_page_config(page_title="FitBot - Week 2", page_icon="💪")
-st.title("FitBot — Week 2 (RAG demo)")
+st.title("💪 FitBot — Week 2 Progress")
+st.write("This version uses **OpenAI + FAISS (RAG pipeline)** to give fitness advice.")
 
-# initialize embeddings and llm with explicit api key
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=OPENAI_KEY)
-llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=OPENAI_KEY)
+# ---- Initialize OpenAI models ----
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    openai_api_key=OPENAI_KEY
+)
 
-# load KB
-kb_path = "data.txt"
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    openai_api_key=OPENAI_KEY
+)
+
+# ---- Load fitness knowledge base ----
+kb_path = "data/fitness.txt"
 if not os.path.exists(kb_path):
-    st.error(f"Knowledge base missing: {kb_path}")
+    st.error(f"Knowledge base file missing: {kb_path}")
     st.stop()
 
 with open(kb_path, "r", encoding="utf-8") as f:
-    text = f.read()
+    fitness_text = f.read()
 
-# split and build FAISS
+# ---- Split text into chunks ----
 splitter = CharacterTextSplitter(chunk_size=300, chunk_overlap=50)
-docs = splitter.create_documents([text])
+docs = splitter.create_documents([fitness_text])
+
+# ---- Create FAISS vector store ----
 vectorstore = FAISS.from_documents(docs, embeddings)
 
-qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever(), chain_type="stuff")
+# ---- Create QA chain (RAG pipeline) ----
+qa = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(),
+    chain_type="stuff"
+)
 
-query = st.text_input("Ask FitBot a fitness question:")
+# ---- Chat interface ----
+query = st.text_input("Ask FitBot a question about workouts, diet, or fitness:")
+
 if query:
     with st.spinner("Thinking..."):
         answer = qa.run(query)
-    st.write(answer)
+    st.success(answer)
 else:
-    st.info("Enter a question above to try RAG-based answers.")
+    st.info("Type a fitness question above to try FitBot 🚀")
