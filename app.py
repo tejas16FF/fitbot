@@ -35,7 +35,7 @@ llm = ChatOpenAI(
 )
 
 # ---- Load fitness knowledge base ----
-kb_path = "data/fitness.txt"
+kb_path = "data.txt"
 if not os.path.exists(kb_path):
     st.error(f"Knowledge base file missing: {kb_path}")
     st.stop()
