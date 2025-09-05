@@ -1,17 +1,47 @@
+import os
 import streamlit as st
+from dotenv import load_dotenv
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.vectorstores import FAISS
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.chains import RetrievalQA
 
-st.set_page_config(page_title="FitBot - Week 1", page_icon="💪")
-st.title("💪 FitBot - AI Powered Fitness Chatbot")
-st.write("This is a **Week 1 demo** version. Currently, it shows dummy responses.")
+# Load environment variables
+load_dotenv()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-user_input = st.text_input("Ask me about fitness, workouts, or diet:")
+# UI setup
+st.set_page_config(page_title="FitBot - Week 2", page_icon="💪")
+st.title("💪 FitBot - AI Powered Fitness Chatbot (Week 2 Progress)")
+st.write("Now using OpenAI + FAISS (RAG pipeline)!")
+
+# Initialize OpenAI models
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=OPENAI_API_KEY)
+llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=OPENAI_API_KEY)
+
+# Load fitness knowledge base
+with open("data.txt", "r") as f:
+    fitness_text = f.read()
+
+# Split text into chunks
+splitter = CharacterTextSplitter(chunk_size=200, chunk_overlap=20)
+docs = splitter.create_documents([fitness_text])
+
+# Create FAISS vector store
+vectorstore = FAISS.from_documents(docs, embeddings)
+
+# Create QA chain (RAG pipeline)
+qa = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=vectorstore.as_retriever(),
+    chain_type="stuff"
+)
+
+# Chat input
+user_input = st.text_input("Ask me about workouts, diet, or fitness tips:")
 
 if user_input:
-    if "workout" in user_input.lower():
-        st.success("You should try 30 minutes of cardio and some light strength training 💪")
-    elif "diet" in user_input.lower():
-        st.success("Eat more protein and veggies while staying hydrated 🥗💧")
-    else:
-        st.success("Thanks for your question! The AI-powered responses will be added soon 🤖")
+    response = qa.run(user_input)
+    st.success(response)
 else:
-    st.info("Enter a question above to see a sample response.")
+    st.info("Enter a question above to get a personalized fitness response.")
