@@ -1,0 +1,21 @@
+# keep secrets private
+.env
+
+# python junk
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# venvs
+venv/
+.venv/
+env/
+.env/
+
+# streamlit local
+.streamlit/
+
+# OS files
+.DS_Store
+Thumbs.db
