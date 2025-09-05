@@ -3,14 +3,26 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-# Load .env file (for OPENAI_API_KEY)
+# Load .env file (contains API credentials)
 load_dotenv()
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-# Safety check
+# Read environment variables
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_ORG = os.getenv("OPENAI_ORG_ID")
+OPENAI_PROJECT = os.getenv("OPENAI_PROJECT_ID")
+
+# ---- Safety checks ----
 if not OPENAI_KEY:
-    st.error("❌ OpenAI API key not found. Please set it in .env as OPENAI_API_KEY")
+    st.error("❌ No API key found. Please set OPENAI_API_KEY in .env")
     st.stop()
+
+# ---- Configure OpenAI client (for project keys) ----
+import openai
+openai.api_key = OPENAI_KEY
+if OPENAI_ORG:
+    openai.organization = OPENAI_ORG
+if OPENAI_PROJECT:
+    openai.project = OPENAI_PROJECT
 
 # ---- LangChain & OpenAI imports ----
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -21,21 +33,10 @@ from langchain.chains import RetrievalQA
 # ---- Streamlit UI ----
 st.set_page_config(page_title="FitBot - Week 2", page_icon="💪")
 st.title("💪 FitBot — Week 2 Progress")
-st.write("This version uses **OpenAI + FAISS (RAG pipeline)** to give fitness advice.")
+st.write("This version uses **OpenAI (Project Key) + FAISS (RAG pipeline)** to give fitness advice.")
 
-# ---- Initialize OpenAI models ----
-embeddings = OpenAIEmbeddings(
-    model="text-embedding-3-small",
-    openai_api_key=OPENAI_KEY
-)
-
-llm = ChatOpenAI(
-    model="gpt-4o-mini",
-    openai_api_key=OPENAI_KEY
-)
-
-# ---- Load fitness knowledge base ----
-kb_path = "data.txt"
+# ---- Load knowledge base ----
+kb_path = "data.txt"   # your file path
 if not os.path.exists(kb_path):
     st.error(f"Knowledge base file missing: {kb_path}")
     st.stop()
@@ -48,9 +49,17 @@ splitter = CharacterTextSplitter(chunk_size=300, chunk_overlap=50)
 docs = splitter.create_documents([fitness_text])
 
 # ---- Create FAISS vector store ----
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small",
+    openai_api_key=OPENAI_KEY
+)
 vectorstore = FAISS.from_documents(docs, embeddings)
 
 # ---- Create QA chain (RAG pipeline) ----
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    openai_api_key=OPENAI_KEY
+)
 qa = RetrievalQA.from_chain_type(
     llm=llm,
     retriever=vectorstore.as_retriever(),
