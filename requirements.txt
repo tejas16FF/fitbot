@@ -5,3 +5,4 @@ langchain-google-genai
 google-genai
 faiss-cpu
 python-dotenv
+sentence-transformers
