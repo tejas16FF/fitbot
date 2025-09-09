@@ -21,8 +21,8 @@ from langchain.chains import RetrievalQA
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ---- Streamlit UI ----
-st.set_page_config(page_title="FitBot (Week 2)", page_icon="💪")
-st.title("💪 FitBot — Week 2")
+st.set_page_config(page_title="FitBot", page_icon="💪")
+st.title("💪 FitBot ")
 st.write("Using Hugging Face embeddings for FAISS + Google Gemini for answers.")
 
 # ---- Load knowledge base ----
