@@ -1,4 +1,4 @@
-# app.py  (Week 2 — HuggingFace Embeddings + Gemini LLM + FAISS RAG)
+# app.py — FitBot (RAG with HuggingFace + Gemini + FAISS)
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -7,10 +7,10 @@ from dotenv import load_dotenv
 load_dotenv("/workspaces/fitbot/.env")
 
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
-CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")  # adjust to your available Gemini model
+CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")  # default Gemini model
 
 if not GOOGLE_KEY:
-    st.error("❌ GOOGLE_API_KEY not found in .env. Add your Gemini API key.")
+    st.error("❌ GOOGLE_API_KEY not found in .env. Please add your Gemini API key.")
     st.stop()
 
 # LangChain imports
@@ -21,21 +21,28 @@ from langchain.chains import RetrievalQA
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 # ---- Streamlit UI ----
-st.set_page_config(page_title="FitBot", page_icon="💪")
-st.title("💪 FitBot ")
-st.write("Using Hugging Face embeddings for FAISS + Google Gemini for answers.")
+st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
+
+st.title("💪 FitBot - Your AI Fitness Assistant")
+st.markdown(
+    """
+    Welcome to **FitBot**!  
+    Ask me anything about **workouts, nutrition, recovery, or motivation**.  
+    Powered by **Hugging Face embeddings + FAISS vector search + Google Gemini LLM**.
+    """
+)
 
 # ---- Load knowledge base ----
 kb_path = "data.txt"
 if not os.path.exists(kb_path):
-    st.error(f"Knowledge base not found: {kb_path}")
+    st.error(f"❌ Knowledge base not found: {kb_path}")
     st.stop()
 
 with open(kb_path, "r", encoding="utf-8") as f:
     text = f.read()
 
 # ---- Split text ----
-splitter = CharacterTextSplitter(chunk_size=300, chunk_overlap=50)
+splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
 docs = splitter.create_documents([text])
 
 # ---- Embeddings (Hugging Face) ----
@@ -55,11 +62,12 @@ qa = RetrievalQA.from_chain_type(
 )
 
 # ---- Chat UI ----
-query = st.text_input("Ask FitBot a question about workouts, diet, or fitness:")
+st.subheader("💬 Chat with FitBot")
+query = st.text_input("Ask a fitness question:")
 
 if query:
-    with st.spinner("Thinking with Gemini..."):
+    with st.spinner("🤔 Thinking..."):
         answer = qa.run(query)
     st.success(answer)
 else:
-    st.info("Type a question above to try FitBot with Gemini + HuggingFace embeddings.")
+    st.info("Type your question above to get started!")
