@@ -7,6 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.prompts import PromptTemplate  # ✅ NEW
 
 # -----------------------------
 # Load environment variables
@@ -46,7 +47,8 @@ def create_qa_chain(vectorstore):
         temperature=0.7  # Slightly creative but professional
     )
 
-    custom_prompt = """
+    # ✅ PromptTemplate instead of raw string
+    template = """
     You are FitBot, a professional AI fitness coach.
     Always provide clear, polite, and detailed answers
     about workouts, nutrition, recovery, health, and motivation.
@@ -54,13 +56,18 @@ def create_qa_chain(vectorstore):
     If exact details are missing, provide the best possible
     professional advice instead.
     Keep your tone supportive and encouraging.
+
+    Question: {question}
+    Answer:
     """
+
+    prompt = PromptTemplate(template=template, input_variables=["question"])
 
     return RetrievalQA.from_chain_type(
         llm=llm,
         retriever=vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3}),
         chain_type="stuff",
-        chain_type_kwargs={"prompt": custom_prompt}
+        chain_type_kwargs={"prompt": prompt}
     )
 
 def answer_query(qa, query):
