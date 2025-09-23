@@ -7,7 +7,7 @@ from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import PromptTemplate  # ✅ NEW
+from langchain.prompts import PromptTemplate
 
 # -----------------------------
 # Load environment variables
@@ -44,10 +44,10 @@ def create_qa_chain(vectorstore):
     llm = ChatGoogleGenerativeAI(
         model=CHAT_MODEL,
         google_api_key=GOOGLE_KEY,
-        temperature=0.7  # Slightly creative but professional
+        temperature=0.7
     )
 
-    # ✅ PromptTemplate instead of raw string
+    # ✅ Must include {context} and {question}
     template = """
     You are FitBot, a professional AI fitness coach.
     Always provide clear, polite, and detailed answers
@@ -57,11 +57,12 @@ def create_qa_chain(vectorstore):
     professional advice instead.
     Keep your tone supportive and encouraging.
 
+    Context: {context}
     Question: {question}
     Answer:
     """
 
-    prompt = PromptTemplate(template=template, input_variables=["question"])
+    prompt = PromptTemplate(template=template, input_variables=["context", "question"])
 
     return RetrievalQA.from_chain_type(
         llm=llm,
@@ -78,7 +79,7 @@ def answer_query(qa, query):
 # -----------------------------
 # Streamlit UI
 # -----------------------------
-st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
+st.set_page_config(page_title="FitBot", page_icon="💪", layout="centered")
 
 st.title("💪 FitBot - Your AI Fitness Assistant")
 st.markdown(
@@ -88,14 +89,6 @@ st.markdown(
     professional, supportive advice.
     """
 )
-
-# Sidebar info
-st.sidebar.header("ℹ️ Project Info")
-st.sidebar.write("**FitBot** is an AI-powered fitness assistant.")
-st.sidebar.write("- Uses **Hugging Face embeddings** for semantic understanding.")
-st.sidebar.write("- Stores knowledge in a **FAISS vector database**.")
-st.sidebar.write("- Answers powered by **Google Gemini LLM**.")
-st.sidebar.write("- Built with **Streamlit** for interactive UI.")
 
 # -----------------------------
 # Main Logic
