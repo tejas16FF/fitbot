@@ -220,15 +220,13 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
     return answer
 
 # -----------------------------
-# Seeds: Frequently Asked Questions (Replaces Quick Buttons)
+# Seeds: Frequently Asked Questions (Replaced by Buttons)
 # -----------------------------
 FAQ_QUERIES = {
-    "3-Day Beginner Workout": "Give me a 3-day beginner full-body workout plan.",
-    "Post-Workout Meal Idea": "What is a good post-workout meal to support recovery?",
-    "Protein Substitutions": "I am vegetarian. What are non-meat, high-protein foods I can eat?",
-    "Injury Guidance (Knee)": "What are safe, general guidelines for someone with knee pain (non-medical advice)?",
-    "How to Stay Motivated": "Give me tips on how to stay consistent and motivated over the long term.",
-    "What is Progressive Overload?": "Explain progressive overload and why it is important for muscle gain."
+    "3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
+    "Post-Workout Meal": "What is a good post-workout meal to support recovery?",
+    "Protein Subs": "I am vegetarian. What are non-meat, high-protein foods I can eat?",
+    "Motivation Tips": "Give me tips on how to stay consistent and motivated over the long term.",
 }
 
 # -----------------------------
@@ -243,26 +241,26 @@ st.markdown("---")
 st.subheader("👤 Personalized Profile Settings")
 profile_cols = st.columns([1,1,1,1,1,1])
 with profile_cols[0]:
-    name = st.text_input("Name", value=st.session_state.profile.get("name", ""))
+    name = st.text_input("Name", value=st.session_state.profile.get("name", ""), key="profile_name")
 with profile_cols[1]:
-    age = st.text_input("Age", value=st.session_state.profile.get("age", 25))
+    age = st.text_input("Age", value=st.session_state.profile.get("age", 25), key="profile_age")
 with profile_cols[2]:
-    weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70))
+    weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70), key="profile_weight")
 with profile_cols[3]:
     gender_options = ["Male", "Female", "Other", "Prefer not to say"]
     current_gender = st.session_state.profile.get("gender", "Prefer not to say")
     gender_index = gender_options.index(current_gender) if current_gender in gender_options else 3
-    gender = st.selectbox("Gender", gender_options, index=gender_index)
+    gender = st.selectbox("Gender", gender_options, index=gender_index, key="profile_gender")
 with profile_cols[4]:
     goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
     current_goal = st.session_state.profile.get("goal", "Weight loss")
     goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 
-    goal = st.selectbox("Primary Goal", goal_options, index=goal_index)
+    goal = st.selectbox("Primary Goal", goal_options, index=goal_index, key="profile_goal")
 with profile_cols[5]:
     level_options = ["Beginner", "Intermediate", "Advanced"]
     current_level = st.session_state.profile.get("level", "Beginner")
     level_index = level_options.index(current_level) if current_level in level_options else 0
-    level = st.selectbox("Level", level_options, index=level_index)
+    level = st.selectbox("Level", level_options, index=level_index, key="profile_level")
 
 # Auto-update profile state on input change
 st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level, "gender": gender})
@@ -283,21 +281,28 @@ with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS ind
         st.error("Setup Error: Gemini API key not configured or model failed to load.")
         st.stop()
 
-# --- FAQ Dropdown (Replaces Quick Buttons) ---
-with st.expander("❓ Frequently Asked Questions (Quick Start)", expanded=False):
-    faq_col = st.columns([0.5, 3])
-    with faq_col[0]:
-        selected_faq = st.selectbox("Select a Topic:", ["Select a question..."] + list(FAQ_QUERIES.keys()), label_visibility="collapsed")
-    if selected_faq != "Select a question...":
-        st.session_state["last_quick"] = FAQ_QUERIES[selected_faq]
-        st.rerun()
 
+# --- Replaced FAQ Dropdown with Buttons (Below Profile, Above Chat Input) ---
+
+st.markdown("---")
+st.subheader("💡 Quick Start Questions")
+button_cols = st.columns(len(FAQ_QUERIES))
+btn_keys = list(FAQ_QUERIES.keys())
+for i, c in enumerate(button_cols):
+    if i < len(btn_keys):
+        q_label = btn_keys[i]
+        if c.button(q_label):
+            st.session_state["last_quick"] = FAQ_QUERIES[q_label]
+            st.rerun() 
 
 # --- Main Chat Input ---
 # Use the buffer if a quick button was clicked, otherwise use the text input
 initial_input = st.session_state.pop("last_quick", "") 
-# NOTE: Removed 'ask_button' since st.form/st.chat_input handles submission via Enter/button automatically
-user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input", max_chars=2000)
+# Use st.chat_input, which automatically handles submission via Enter key
+user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
+                            key="main_input", 
+                            max_chars=2000, 
+                            value=initial_input)
 
 
 # --- Handle Execution (Triggered by Enter Key on chat_input) ---
@@ -323,7 +328,7 @@ if not st.session_state.history:
     st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
     st.info("Set your profile above for personalized advice!")
 else:
-    # Display chronological order (or reverse if preferred for chat window)
+    # Display reverse chronological order
     for turn in reversed(st.session_state.history): 
         with st.chat_message("user"):
             st.markdown(turn['user'])
