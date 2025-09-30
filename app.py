@@ -1,7 +1,7 @@
 import os
 import time
 import streamlit as st
-import random # Added for Daily Tip
+import random
 from dotenv import load_dotenv
 from typing import List
 
@@ -14,13 +14,14 @@ from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import AIMessage, HumanMessage 
 
-# -----------------------------
+# --- Configuration ---
+# Path for FAISS index persistence
+FAISS_INDEX_PATH = "faiss_index.bin"
+
 # Load environment variables
-# -----------------------------
-# Edit this path if your .env is elsewhere
 load_dotenv(".env")
 
-GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")  # Gemini API key
+GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")  # Gemini API key
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
 # -----------------------------
@@ -64,15 +65,15 @@ DAILY_TIPS = [
 # Session-state initialization
 # -----------------------------
 if "history" not in st.session_state:
-    # history: list of dictionaries representing conversation turns
-    st.session_state.history = []
+    # history: list of dictionaries representing conversation turns
+    st.session_state.history = []
 
 if "profile" not in st.session_state:
-    # Initialize full profile, including level for prompt clarity
-    st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner"} 
+    # Initialize full profile, including level for prompt clarity
+    st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner"} 
 
 if "vectorstore_built" not in st.session_state:
-    st.session_state.vectorstore_built = False
+    st.session_state.vectorstore_built = False
     
 if "initial_tip" not in st.session_state:
     st.session_state.initial_tip = random.choice(DAILY_TIPS)
@@ -81,43 +82,54 @@ if "initial_tip" not in st.session_state:
 # Helper: load knowledge base file
 # -----------------------------
 def read_knowledge_base(path="data.txt") -> str:
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    # fallback 
-    return FALLBACK_KB
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    # fallback 
+    return FALLBACK_KB
 
 # -----------------------------
-# Cached: build vectorstore (expensive) — cached so it doesn't rebuild on each interaction
+# Cached: build vectorstore (expensive) — uses disk cache for FAISS
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def build_vectorstore_from_text(text: str):
-    """
-    Splits text into chunks, creates embeddings using MiniLM, and builds FAISS index.
-    Returns: FAISS vectorstore object
-    """
-    splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
-    docs = splitter.create_documents([text])
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore
+    """
+    Splits text, creates embeddings, builds FAISS index, and persists it to disk.
+    If the index exists on disk, it is loaded instantly.
+    """
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    
+    if os.path.exists(FAISS_INDEX_PATH):
+        # Load instantly from disk (fast)
+        vectorstore = FAISS.load_local(".", embeddings, FAISS_INDEX_PATH)
+        return vectorstore
+
+    # If file not found, build index (slow, runs only once)
+    splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
+    docs = splitter.create_documents([text])
+    
+    vectorstore = FAISS.from_documents(docs, embeddings)
+    
+    # Save to disk for persistence
+    vectorstore.save_local(".", FAISS_INDEX_PATH)
+    return vectorstore
 
 # -----------------------------
 # Cached: create LLM (Gemini) and LLMChain with prompt
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def create_llm_and_chain():
-    if not GOOGLE_KEY:
-        return None, None
+    if not GOOGLE_KEY:
+        return None, None
 
-    llm = ChatGoogleGenerativeAI(
-        model=CHAT_MODEL,
-        google_api_key=GOOGLE_KEY,
-        temperature=0.2  # lower temperature for reliable answers
-    )
+    llm = ChatGoogleGenerativeAI(
+        model=CHAT_MODEL,
+        google_api_key=GOOGLE_KEY,
+        temperature=0.2  # lower temperature for reliable answers
+    )
 
-    # Prompt template includes profile and chat_history (so bot can personalize & remember)
-    template = """
+    # Prompt template includes profile and chat_history (so bot can personalize & remember)
+    template = """
 You are FitBot, a professional and friendly AI fitness coach. Respond in a helpful, supportive,
 and safe manner. NEVER mention internal mechanics (like "knowledge base", "context", or "retrieved docs").
 If very specific medical guidance is requested, give a general guideline and recommend consulting a professional.
@@ -140,40 +152,40 @@ Answer concisely but fully, with practical steps, optionally a short 1-2 line mo
 If the user asks about diet and lists restrictions (e.g., vegetarian), provide substitutions.
 """
 
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["profile", "level", "chat_history", "context", "question"]
-    )
+    prompt = PromptTemplate(
+        template=template,
+        input_variables=["profile", "level", "chat_history", "context", "question"]
+    )
 
-    chain = LLMChain(llm=llm, prompt=prompt)
-    return llm, chain
+    chain = LLMChain(llm=llm, prompt=prompt)
+    return llm, chain
 
 # -----------------------------
 # Utility: make chat_history string for prompt
 # -----------------------------
 def format_history(history: List[dict], max_turns: int = 6) -> str:
-    """Format last N turns as a compact chat history string."""
-    h = history[-max_turns:]
-    lines = []
-    for turn in h:
-        user = turn.get("user", "")
-        assistant = turn.get("assistant", "")
-        lines.append(f"User: {user}")
-        lines.append(f"Assistant: {assistant}")
-    return "\n".join(lines) if lines else "No previous conversation turns."
+    """Format last N turns as a compact chat history string."""
+    h = history[-max_turns:]
+    lines = []
+    for turn in h:
+        user = turn.get("user", "")
+        assistant = turn.get("assistant", "")
+        lines.append(f"User: {user}")
+        lines.append(f"Assistant: {assistant}")
+    return "\n".join(lines) if lines else "No previous conversation turns."
 
 # -----------------------------
 # Retrieve & answer (manual RAG — we control variables passed to LLM)
 # -----------------------------
 def retrieve_relevant_context(vectorstore, query: str, k: int = 3) -> str:
-    """
-    Return a single text block concatenating top-k retrieved chunks.
-    """
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
-    docs = retriever.get_relevant_documents(query)
-    # join with separators to preserve chunk boundaries
-    context = "\n\n---\n\n".join(d.page_content for d in docs)
-    return context
+    """
+    Return a single text block concatenating top-k retrieved chunks.
+    """
+    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
+    docs = retriever.get_relevant_documents(query)
+    # join with separators to preserve chunk boundaries
+    context = "\n\n---\n\n".join(d.page_content for d in docs)
+    return context
 
 def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dict, history: List[dict]):
     """Retrieve context, format prompt inputs, call LLM chain, and return answer string."""
@@ -230,11 +242,16 @@ with profile_cols[1]:
 with profile_cols[2]:
     weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70))
 with profile_cols[3]:
-    goal = st.selectbox("Primary Goal", ["Muscle gain", "Weight loss", "Endurance", "General health"],
-                         index=["Muscle gain", "Weight loss", "Endurance", "General health"].index(st.session_state.profile.get("goal", "Weight loss")))
+    goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
+    current_goal = st.session_state.profile.get("goal", "Weight loss")
+    goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 # Default to Weight loss
+    goal = st.selectbox("Primary Goal", goal_options, index=goal_index)
+
 with profile_cols[4]:
-    level = st.selectbox("Level", ["Beginner", "Intermediate", "Advanced"],
-                        index=["Beginner", "Intermediate", "Advanced"].index(st.session_state.profile.get("level", "Beginner")))
+    level_options = ["Beginner", "Intermediate", "Advanced"]
+    current_level = st.session_state.profile.get("level", "Beginner")
+    level_index = level_options.index(current_level) if current_level in level_options else 0 # Default to Beginner
+    level = st.selectbox("Level", level_options, index=level_index)
 
 # Auto-update profile state on input change
 st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level})
@@ -255,12 +272,17 @@ for i, c in enumerate(cols):
 
 
 # --- Load KB and Models (Cached) ---
-with st.spinner("Preparing RAG components: loading knowledge base, embeddings, and Gemini model..."):
+if not GOOGLE_KEY:
+    st.error("Setup Error: GOOGLE_API_KEY environment variable is missing. Please set it in your .env file.")
+    st.stop()
+    
+with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index from disk ({FAISS_INDEX_PATH})..."):
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore_from_text(kb_text)
     llm, llm_chain = create_llm_and_chain()
-    if llm is None or llm_chain is None:
-        st.error("Setup Error: Gemini API key not configured or model failed to load. Check GOOGLE_API_KEY.")
+    
+    if llm_chain is None:
+        st.error("Setup Error: Gemini API key not configured or model failed to load.")
         st.stop()
 
 
@@ -278,7 +300,7 @@ if initial_input and initial_input == user_query:
 # --- Handle Execution ---
 if ask_button and user_query.strip():
     # 1. Run pipeline
-    with st.spinner(f"🤔 Thinking with Gemini, retrieving context for {user_query[:30]}..."):
+    with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
         start = time.time()
         resp = answer_query_pipeline(llm_chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
         latency = time.time() - start
