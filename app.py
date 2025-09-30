@@ -69,8 +69,8 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 if "profile" not in st.session_state:
-    # Initialize full profile, including level for prompt clarity
-    st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner"} 
+    # Initialize full profile, including level and gender
+    st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner", "gender": "Prefer not to say"} 
 
 if "vectorstore_built" not in st.session_state:
     st.session_state.vectorstore_built = False
@@ -129,6 +129,7 @@ def create_llm_and_chain():
     )
 
     # Prompt template includes profile and chat_history (so bot can personalize & remember)
+    # Added {gender} to the prompt structure
     template = """
 You are FitBot, a professional and friendly AI fitness coach. Respond in a helpful, supportive,
 and safe manner. NEVER mention internal mechanics (like "knowledge base", "context", or "retrieved docs").
@@ -138,6 +139,7 @@ If the question is completely out of scope, politely refuse and state your speci
 
 User profile (if available): {profile}
 Fitness Level: {level}
+Gender: {gender}
 
 Conversation so far:
 {chat_history}
@@ -154,7 +156,7 @@ If the user asks about diet and lists restrictions (e.g., vegetarian), provide s
 
     prompt = PromptTemplate(
         template=template,
-        input_variables=["profile", "level", "chat_history", "context", "question"]
+        input_variables=["profile", "level", "gender", "chat_history", "context", "question"]
     )
 
     chain = LLMChain(llm=llm, prompt=prompt)
@@ -206,6 +208,7 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
         answer = chain.predict(
             profile=profile_str, 
             level=profile.get('level', 'Beginner'), # Pass level for structured advice
+            gender=profile.get('gender', 'Prefer not to say'), # Pass gender for enhanced personalization
             chat_history=chat_history_str, 
             context=context, 
             question=query
@@ -217,13 +220,15 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
     return answer
 
 # -----------------------------
-# Seeds: Quick Replies for Demo
+# Seeds: Frequently Asked Questions (Replaces Quick Buttons)
 # -----------------------------
-PREDEFINED_QUERIES = {
-    "3-day workout plan": "Give me a 3-day beginner full-body workout plan.",
-    "Post-workout meal idea": "What is a good post-workout meal to support recovery?",
-    "Vegetarian protein sub": "I am vegetarian. What are non-meat, high-protein foods I can eat?",
-    "Injury advice (Knee)": "What are safe, general guidelines for someone with knee pain (non-medical advice)?"
+FAQ_QUERIES = {
+    "3-Day Beginner Workout": "Give me a 3-day beginner full-body workout plan.",
+    "Post-Workout Meal Idea": "What is a good post-workout meal to support recovery?",
+    "Protein Substitutions": "I am vegetarian. What are non-meat, high-protein foods I can eat?",
+    "Injury Guidance (Knee)": "What are safe, general guidelines for someone with knee pain (non-medical advice)?",
+    "How to Stay Motivated": "Give me tips on how to stay consistent and motivated over the long term.",
+    "What is Progressive Overload?": "Explain progressive overload and why it is important for muscle gain."
 }
 
 # -----------------------------
@@ -234,7 +239,9 @@ st.title("💪 FitBot — Your AI Fitness Assistant")
 st.caption("Retrieval-Augmented Generation (RAG) System | Gemini + HuggingFace + FAISS")
 
 # --- Profile form (Critical for Personalization) ---
-profile_cols = st.columns([1,1,1,1,1])
+st.markdown("---")
+st.subheader("👤 Personalized Profile Settings")
+profile_cols = st.columns([1,1,1,1,1,1])
 with profile_cols[0]:
     name = st.text_input("Name", value=st.session_state.profile.get("name", ""))
 with profile_cols[1]:
@@ -242,33 +249,24 @@ with profile_cols[1]:
 with profile_cols[2]:
     weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70))
 with profile_cols[3]:
+    gender_options = ["Male", "Female", "Other", "Prefer not to say"]
+    current_gender = st.session_state.profile.get("gender", "Prefer not to say")
+    gender_index = gender_options.index(current_gender) if current_gender in gender_options else 3
+    gender = st.selectbox("Gender", gender_options, index=gender_index)
+with profile_cols[4]:
     goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
     current_goal = st.session_state.profile.get("goal", "Weight loss")
-    goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 # Default to Weight loss
+    goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 
     goal = st.selectbox("Primary Goal", goal_options, index=goal_index)
-
-with profile_cols[4]:
+with profile_cols[5]:
     level_options = ["Beginner", "Intermediate", "Advanced"]
     current_level = st.session_state.profile.get("level", "Beginner")
-    level_index = level_options.index(current_level) if current_level in level_options else 0 # Default to Beginner
+    level_index = level_options.index(current_level) if current_level in level_options else 0
     level = st.selectbox("Level", level_options, index=level_index)
 
 # Auto-update profile state on input change
-st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level})
-st.info(f"**Profile Set:** Goal: **{st.session_state.profile['goal']}** | Level: **{st.session_state.profile['level']}**. Ask a question for personalized advice.")
-
-
-# --- Quick Buttons (Enrichment Feature) ---
-st.markdown("##### Quick Questions for Demo:")
-cols = st.columns(len(PREDEFINED_QUERIES))
-btn_keys = list(PREDEFINED_QUERIES.keys())
-for i, c in enumerate(cols):
-    if i < len(btn_keys):
-        q_label = btn_keys[i]
-        if c.button(q_label):
-            st.session_state["last_quick"] = PREDEFINED_QUERIES[q_label]
-            # FIX: Use st.rerun() instead of st.experimental_rerun()
-            st.rerun() 
+st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level, "gender": gender})
+st.info(f"**Profile Set:** Goal: **{st.session_state.profile['goal']}** | Gender: **{st.session_state.profile['gender']}**. Ask a question below for personalized advice.")
 
 
 # --- Load KB and Models (Cached) ---
@@ -276,7 +274,7 @@ if not GOOGLE_KEY:
     st.error("Setup Error: GOOGLE_API_KEY environment variable is missing. Please set it in your .env file.")
     st.stop()
     
-with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index from disk ({FAISS_INDEX_PATH})..."):
+with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index from disk..."):
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore_from_text(kb_text)
     llm, llm_chain = create_llm_and_chain()
@@ -285,20 +283,25 @@ with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS ind
         st.error("Setup Error: Gemini API key not configured or model failed to load.")
         st.stop()
 
+# --- FAQ Dropdown (Replaces Quick Buttons) ---
+with st.expander("❓ Frequently Asked Questions (Quick Start)", expanded=False):
+    faq_col = st.columns([0.5, 3])
+    with faq_col[0]:
+        selected_faq = st.selectbox("Select a Topic:", ["Select a question..."] + list(FAQ_QUERIES.keys()), label_visibility="collapsed")
+    if selected_faq != "Select a question...":
+        st.session_state["last_quick"] = FAQ_QUERIES[selected_faq]
+        st.rerun()
+
 
 # --- Main Chat Input ---
 # Use the buffer if a quick button was clicked, otherwise use the text input
 initial_input = st.session_state.pop("last_quick", "") 
-user_query = st.text_input("Enter your fitness question:", value=initial_input, key="main_input")
-ask_button = st.button("Ask FitBot")
-
-# Automatically trigger execution if a quick query was entered
-if initial_input and initial_input == user_query:
-    ask_button = True
+# NOTE: Removed 'ask_button' since st.form/st.chat_input handles submission via Enter/button automatically
+user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input", max_chars=2000)
 
 
-# --- Handle Execution ---
-if ask_button and user_query.strip():
+# --- Handle Execution (Triggered by Enter Key on chat_input) ---
+if user_query and user_query.strip():
     # 1. Run pipeline
     with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
         start = time.time()
@@ -308,7 +311,7 @@ if ask_button and user_query.strip():
     # 2. Save and display immediately
     st.session_state.history.append({"user": user_query, "assistant": resp, "time": latency})
     
-    # Rerun to clear the input and populate the history display cleanly
+    # Rerun to clear the chat_input and populate the history display cleanly
     st.rerun() 
 
 # --- Display History ---
@@ -320,7 +323,7 @@ if not st.session_state.history:
     st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
     st.info("Set your profile above for personalized advice!")
 else:
-    # Display reverse chronological order
+    # Display chronological order (or reverse if preferred for chat window)
     for turn in reversed(st.session_state.history): 
         with st.chat_message("user"):
             st.markdown(turn['user'])
