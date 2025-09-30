@@ -76,15 +76,14 @@ FAQ_QUERIES = {
 # Session-state initialization
 # -----------------------------
 if "history" not in st.session_state:
-    # history: list of dictionaries representing conversation turns (memory)
     st.session_state.history = []
 
 if "profile" not in st.session_state:
-    # Initialize full profile, including gender/level for personalization
     st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner", "gender": "Prefer not to say"} 
 
-if "vectorstore_built" not in st.session_state:
-    st.session_state.vectorstore_built = False
+# New state for the two-page flow
+if "profile_submitted" not in st.session_state:
+    st.session_state.profile_submitted = False
     
 if "initial_tip" not in st.session_state:
     st.session_state.initial_tip = random.choice(DAILY_TIPS)
@@ -96,7 +95,6 @@ def read_knowledge_base(path="data.txt") -> str:
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
-    # fallback 
     return FALLBACK_KB
 
 # -----------------------------
@@ -104,30 +102,18 @@ def read_knowledge_base(path="data.txt") -> str:
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def build_vectorstore_from_text(text: str):
-    """
-    Splits text, creates embeddings, builds FAISS index, and persists it to disk.
-    If the index exists on disk, it is loaded instantly (CRITICAL for fast restarts).
-    """
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     
-    # Check if index exists on disk
     if os.path.exists(FAISS_FOLDER_PATH) and any(f.startswith(FAISS_INDEX_PATH) for f in os.listdir(FAISS_FOLDER_PATH)):
-        # Load instantly from disk 
         try:
             vectorstore = FAISS.load_local(FAISS_FOLDER_PATH, embeddings, FAISS_INDEX_PATH)
             return vectorstore
         except Exception:
-            # Fallback if load fails (e.g., corrupted file), proceed to rebuild
             pass
 
-
-    # If file not found or load failed, build index (slow, runs only once)
     splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     docs = splitter.create_documents([text])
-    
     vectorstore = FAISS.from_documents(docs, embeddings)
-    
-    # Save to disk for persistence (Fixed in v2.7)
     vectorstore.save_local(FAISS_FOLDER_PATH, index_name=FAISS_INDEX_PATH)
     return vectorstore
 
@@ -142,16 +128,13 @@ def create_llm_and_chain():
     llm = ChatGoogleGenerativeAI(
         model=CHAT_MODEL,
         google_api_key=GOOGLE_KEY,
-        temperature=0.2  # lower temperature for reliable, factual answers
+        temperature=0.2
     )
 
-    # Full Prompt Template: Includes Profile, Level, Gender, and Chat History for personalization and memory
     template = """
-You are FitBot, a professional and friendly AI fitness coach. Respond in a helpful, supportive,
-and safe manner. NEVER mention internal mechanics (like "knowledge base", "context", or "retrieved docs").
+You are FitBot, a professional and friendly AI fitness coach. Respond in a helpful, supportive, and safe manner. NEVER mention internal mechanics (like "knowledge base", "context", or "retrieved docs").
 If very specific medical guidance is requested, give a general guideline and recommend consulting a professional.
 If the question is completely out of scope, politely refuse and state your specialization: "I specialize in fitness and wellness."
-
 
 User profile (if available): {profile}
 Fitness Level: {level}
@@ -182,7 +165,6 @@ If the user asks about diet and lists restrictions (e.g., vegetarian), provide s
 # Utility: make chat_history string for prompt
 # -----------------------------
 def format_history(history: List[dict], max_turns: int = 6) -> str:
-    """Format last N turns as a compact chat history string."""
     h = history[-max_turns:]
     lines = []
     for turn in h:
@@ -196,31 +178,22 @@ def format_history(history: List[dict], max_turns: int = 6) -> str:
 # Retrieve & answer (manual RAG Pipeline)
 # -----------------------------
 def retrieve_relevant_context(vectorstore, query: str, k: int = 3) -> str:
-    """
-    Return a single text block concatenating top-k retrieved chunks.
-    """
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
     docs = retriever.get_relevant_documents(query)
-    # join with separators to preserve chunk boundaries
     context = "\n\n---\n\n".join(d.page_content for d in docs)
     return context
 
 def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dict, history: List[dict]):
-    """Retrieve context, format prompt inputs, call LLM chain, and return answer string."""
-    
-    # Augment query with last turn for better retrieval (contextual retrieval)
     context_query = f"{history[-1]['user'] if history else ''} {query}" 
     context = retrieve_relevant_context(vectorstore, context_query, k=3) 
     
     if not context.strip():
         context = "General fitness knowledge is used if specific context is unavailable."
 
-    # 2) format history & profile strings
     chat_history_str = format_history(history)
     profile_str = f"Name: {profile.get('name','')}; Age: {profile.get('age','')}; Weight: {profile.get('weight','')}; Goal: {profile.get('goal','')}"
     
     try:
-        # 3) run chain (execute LLM)
         answer = chain.predict(
             profile=profile_str, 
             level=profile.get('level', 'Beginner'), 
@@ -230,121 +203,150 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
             question=query
         )
     except Exception as e:
-        # friendly fallback if LLM/API fails
         answer = "Sorry — I'm having trouble generating an answer right now. Please try again in a moment."
         st.error(f"LLM error: {e}")
     return answer
 
 # -----------------------------
-# Streamlit UI
+# Seeds: Frequently Asked Questions (Buttons)
+# -----------------------------
+FAQ_QUERIES = {
+    "3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
+    "Post-Workout Meal": "What is a good post-workout meal to support recovery?",
+    "Protein Subs": "I am vegetarian. What are non-meat, high-protein foods I can eat?",
+    "Motivation Tips": "Give me tips on how to stay consistent and motivated over the long term.",
+}
+
+# -----------------------------
+# Main UI Logic
 # -----------------------------
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
-st.title("💪 FitBot — Your AI Fitness Assistant")
-st.caption("Retrieval-Augmented Generation (RAG) System | Gemini + HuggingFace + FAISS")
 
-# --- Profile form (Sidebar for separation) ---
-with st.sidebar:
-    st.subheader("👤 Personalized Profile Settings")
-    st.markdown("---")
+# --- Page 1: Profile Setup ---
+if not st.session_state.profile_submitted:
+    st.title("💪 Welcome to FitBot! Let's get started.")
+    st.markdown("Please enter your details to get personalized fitness advice.")
     
-    # Input fields
-    name = st.text_input("Name", value=st.session_state.profile.get("name", ""), key="profile_name")
-    age = st.text_input("Age", value=st.session_state.profile.get("age", 25), key="profile_age")
-    weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70), key="profile_weight")
+    with st.form("profile_form"):
+        st.subheader("Your Profile")
+        name = st.text_input("Name")
+        age = st.text_input("Age (Years)")
+        weight = st.text_input("Weight (kg)")
+        
+        gender_options = ["Male", "Female", "Other", "Prefer not to say"]
+        gender = st.selectbox("Gender", gender_options, index=3)
+        
+        goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
+        goal = st.selectbox("Primary Goal", goal_options)
+        
+        level_options = ["Beginner", "Intermediate", "Advanced"]
+        level = st.selectbox("Level", level_options)
+        
+        submitted = st.form_submit_button("Start Chatting!")
     
-    gender_options = ["Male", "Female", "Other", "Prefer not to say"]
-    current_gender = st.session_state.profile.get("gender", "Prefer not to say")
-    gender_index = gender_options.index(current_gender) if current_gender in gender_options else 3
-    gender = st.selectbox("Gender", gender_options, index=gender_index, key="profile_gender")
-    
-    goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
-    current_goal = st.session_state.profile.get("goal", "Weight loss")
-    goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 
-    goal = st.selectbox("Primary Goal", goal_options, index=goal_index, key="profile_goal")
-    
-    level_options = ["Beginner", "Intermediate", "Advanced"]
-    current_level = st.session_state.profile.get("level", "Beginner")
-    level_index = level_options.index(current_level) if current_level in level_options else 0
-    level = st.selectbox("Level", level_options, index=level_index, key="profile_level")
+    if submitted and all([name, age, weight]):
+        st.session_state.profile.update({
+            "name": name,
+            "age": age,
+            "weight": weight,
+            "goal": goal,
+            "level": level,
+            "gender": gender
+        })
+        st.session_state.profile_submitted = True
+        st.rerun()
+    elif submitted:
+        st.error("Please fill in your name, age, and weight to continue.")
 
-    # Display confirmation in sidebar
-    st.markdown("---")
-    st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level, "gender": gender})
-    st.success("Profile Updated")
-    st.markdown(f"**Goal:** {st.session_state.profile['goal']}")
-    st.markdown(f"**Level:** {st.session_state.profile['level']}")
+# --- Page 2: Main Chat Page ---
+else:
+    st.title("💪 FitBot — Your AI Fitness Assistant")
+    st.caption("Retrieval-Augmented Generation (RAG) System | Gemini + HuggingFace + FAISS")
 
+    # Sidebar: Dedicated to Conversation History
+    with st.sidebar:
+        st.subheader("💬 Conversation History")
+        st.markdown("---")
+        
+        st.info(f"**Profile Set:** Goal: {st.session_state.profile['goal']} | Level: {st.session_state.profile['level']}")
+        
+        # Display history in the sidebar
+        if not st.session_state.history:
+            st.markdown(f"**FitBot:** Hello, {st.session_state.profile['name']}! I'm your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
+        else:
+            for turn in reversed(st.session_state.history): 
+                with st.chat_message("user"):
+                    st.markdown(turn['user'])
+                with st.chat_message("assistant"):
+                    st.markdown(turn['assistant'])
+                st.caption(f"⏱️ Response Time: {turn.get('time', 0):.2f}s")
+                
+        # Optional: Button to clear history
+        if st.button("Clear History", use_container_width=True):
+            st.session_state.history = []
+            st.session_state.initial_tip = random.choice(DAILY_TIPS)
+            st.rerun()
 
-# --- Load KB and Models (Cached) ---
-if not GOOGLE_KEY:
-    st.error("Setup Error: GOOGLE_API_KEY environment variable is missing. Please set it in your .env file.")
-    st.stop()
+    # Main Body: Active Conversation Area
     
-with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index..."):
-    kb_text = read_knowledge_base("data.txt")
-    vectorstore = build_vectorstore_from_text(kb_text)
-    llm, llm_chain = create_llm_and_chain()
-    
-    if llm_chain is None:
-        st.error("Setup Error: Gemini API key not configured or model failed to load.")
+    # Load RAG components (cached)
+    if not GOOGLE_KEY:
+        st.error("Setup Error: GOOGLE_API_KEY environment variable is missing. Please set it in your .env file.")
         st.stop()
+        
+    with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index..."):
+        kb_text = read_knowledge_base("data.txt")
+        vectorstore = build_vectorstore_from_text(kb_text)
+        llm, llm_chain = create_llm_and_chain()
+        
+        if llm_chain is None:
+            st.error("Setup Error: Gemini API key not configured or model failed to load.")
+            st.stop()
 
-# --- Main Content Layout ---
-
-# Inject the daily tip as the first message if no conversation exists
-if not st.session_state.history:
-    st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
-    st.info("Set your profile in the sidebar for personalized advice!")
+    # Quick Start Buttons
+    st.markdown("---")
+    st.subheader("💡 Quick Start Questions")
+    button_cols = st.columns(len(FAQ_QUERIES))
+    btn_keys = list(FAQ_QUERIES.keys())
+    for i, c in enumerate(button_cols):
+        if i < len(btn_keys):
+            q_label = btn_keys[i]
+            if c.button(q_label):
+                st.session_state["last_quick"] = FAQ_QUERIES[q_label]
+                st.rerun() 
     st.markdown("---")
 
+    # Main Chat Input (Triggered by Enter Key)
+    initial_input = st.session_state.pop("last_quick", "") 
+    user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input")
 
-# --- Quick Start Buttons ---
-st.markdown("**:sparkles: Quick Start Questions**")
-button_cols = st.columns(len(FAQ_QUERIES))
-btn_keys = list(FAQ_QUERIES.keys())
-for i, c in enumerate(button_cols):
-    if i < len(btn_keys):
-        q_label = btn_keys[i]
-        if c.button(q_label, key=f"quick_btn_{q_label}"): 
-            st.session_state["last_quick"] = FAQ_QUERIES[q_label]
-            st.rerun() 
-st.markdown("---")
+    if user_query and user_query.strip():
+        with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
+            start = time.time()
+            resp = answer_query_pipeline(llm_chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
+            latency = time.time() - start
 
-# --- Main Chat Input ---
-# Use st.chat_input to handle submission via Enter key
-initial_input = st.session_state.pop("last_quick", "") 
-user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
-                            key="main_input", 
-                            max_chars=2000)
+        st.session_state.history.append({"user": user_query, "assistant": resp, "time": latency})
+        st.rerun()
+    elif initial_input: # If quick button was pressed, run pipeline with stored question
+        with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
+            start = time.time()
+            resp = answer_query_pipeline(llm_chain, vectorstore, initial_input, st.session_state.profile, st.session_state.history)
+            latency = time.time() - start
 
-# Workaround for quick button submission
-if initial_input and initial_input != user_query:
-    user_query = initial_input
+        st.session_state.history.append({"user": initial_input, "assistant": resp, "time": latency})
+        st.rerun()
 
-
-# --- Handle Execution (Triggered by Enter Key OR Quick Button Workaround) ---
-if user_query and user_query.strip():
-    # 1. Run pipeline
-    with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
-        start = time.time()
-        resp = answer_query_pipeline(llm_chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
-        latency = time.time() - start
-
-    # 2. Save and display immediately
-    st.session_state.history.append({"user": user_query, "assistant": resp, "time": latency})
-    st.rerun() 
-
-# --- Display History ---
-st.subheader("💬 Conversation History")
-# Display chronological order within the history column
-for turn in reversed(st.session_state.history): 
-    with st.chat_message("user"):
-        st.markdown(turn['user'])
-    with st.chat_message("assistant"):
-        st.markdown(turn['assistant'])
-    st.caption(f"⏱️ Response Time: {turn.get('time', 0):.2f}s")
-
-
-# small footer
-st.markdown("---")
-st.caption("FitBot — Capstone Project (RAG, Memory, Personalization). Always consult a licensed professional for medical issues.")
+    # The active conversation display (only shows the latest few turns for a clean main page)
+    st.subheader("Your Conversation")
+    if st.session_state.history:
+        latest_turn = st.session_state.history[-1]
+        with st.chat_message("user"):
+            st.markdown(latest_turn['user'])
+        with st.chat_message("assistant"):
+            st.markdown(latest_turn['assistant'])
+    else:
+        st.markdown(f"**FitBot:** Hello, {st.session_state.profile['name']}! I'm your AI fitness coach. How can I support your goals today?")
+        
+    st.markdown("---")
+    st.caption("FitBot — Capstone Project (RAG, Memory, Personalization). Always consult a licensed professional for medical issues.")
