@@ -290,60 +290,64 @@ with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS ind
         st.stop()
 
 
-# --- Quick Start Buttons (Main Content Area) ---
-st.subheader("💡 Quick Start Questions")
-button_cols = st.columns(len(FAQ_QUERIES))
-btn_keys = list(FAQ_QUERIES.keys())
-for i, c in enumerate(button_cols):
-    if i < len(btn_keys):
-        q_label = btn_keys[i]
-        # Use a lambda function wrapper to avoid button key collision
-        if c.button(q_label, key=f"quick_btn_{q_label}"): 
-            st.session_state["last_quick"] = FAQ_QUERIES[q_label]
-            st.rerun() 
+# --- Main Content Layout ---
+# Split the main area into two columns: Left for Input/Controls, Right for History
+col_input, col_history = st.columns([1, 1.5]) 
 
-# --- Main Chat Input ---
-initial_input = st.session_state.pop("last_quick", "") 
-# st.chat_input handles submission via Enter key
-user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
-                            key="main_input", 
-                            max_chars=2000)
-
-# Workaround for quick button submission
-if initial_input and initial_input != user_query:
-    user_query = initial_input
-
-
-# --- Handle Execution (Triggered by Enter Key on chat_input OR Quick Button Workaround) ---
-if user_query and user_query.strip():
-    # 1. Run pipeline
-    with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
-        start = time.time()
-        resp = answer_query_pipeline(llm_chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
-        latency = time.time() - start
-
-    # 2. Save and display immediately
-    st.session_state.history.append({"user": user_query, "assistant": resp, "time": latency})
+with col_input:
+    # --- Quick Start Buttons ---
+    st.subheader("💬 Start Conversation")
+    st.markdown("---")
     
-    # Rerun to clear the chat_input and populate the history display cleanly
-    st.rerun() 
+    st.markdown("**Quick Queries:**")
+    button_cols = st.columns(len(FAQ_QUERIES))
+    btn_keys = list(FAQ_QUERIES.keys())
+    for i, c in enumerate(button_cols):
+        if i < len(btn_keys):
+            q_label = btn_keys[i]
+            if c.button(q_label, key=f"quick_btn_{q_label}"): 
+                st.session_state["last_quick"] = FAQ_QUERIES[q_label]
+                st.rerun() 
+    
+    # --- Main Chat Input ---
+    initial_input = st.session_state.pop("last_quick", "") 
+    user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
+                                key="main_input", 
+                                max_chars=2000)
 
-# --- Display History (Main Content Area) ---
-st.markdown("---")
-st.subheader("💬 Conversation History")
+    # Workaround for quick button submission
+    if initial_input and initial_input != user_query:
+        user_query = initial_input
 
-# Inject the daily tip as the first message if no conversation exists
-if not st.session_state.history:
-    st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
-    st.info("Set your profile in the sidebar for personalized advice!")
-else:
-    # Display reverse chronological order
-    for turn in reversed(st.session_state.history): 
-        with st.chat_message("user"):
-            st.markdown(turn['user'])
-        with st.chat_message("assistant"):
-            st.markdown(turn['assistant'])
-        st.caption(f"⏱️ Response Time: {turn.get('time', 0):.2f}s")
+
+    # --- Handle Execution (Triggered by Enter Key OR Quick Button Workaround) ---
+    if user_query and user_query.strip():
+        # 1. Run pipeline
+        with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
+            start = time.time()
+            resp = answer_query_pipeline(llm_chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
+            latency = time.time() - start
+
+        # 2. Save and display immediately
+        st.session_state.history.append({"user": user_query, "assistant": resp, "time": latency})
+        st.rerun() 
+
+with col_history:
+    st.subheader("⏱️ Conversation History")
+    st.markdown("---")
+
+    # Inject the daily tip as the first message if no conversation exists
+    if not st.session_state.history:
+        st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
+        st.info("Set your profile in the sidebar for personalized advice!")
+    else:
+        # Display chronological order within the history column
+        for turn in reversed(st.session_state.history): 
+            with st.chat_message("user"):
+                st.markdown(turn['user'])
+            with st.chat_message("assistant"):
+                st.markdown(turn['assistant'])
+            st.caption(f"⏱️ Response Time: {turn.get('time', 0):.2f}s")
 
 
 # small footer
