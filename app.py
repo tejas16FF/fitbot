@@ -242,35 +242,37 @@ st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 st.title("💪 FitBot — Your AI Fitness Assistant")
 st.caption("Retrieval-Augmented Generation (RAG) System | Gemini + HuggingFace + FAISS")
 
-# --- Profile form (Critical for Personalization) ---
-st.markdown("---")
-st.subheader("👤 Personalized Profile Settings")
-profile_cols = st.columns([1,1,1,1,1,1])
-with profile_cols[0]:
+# --- Profile form (Sidebar for separation) ---
+with st.sidebar:
+    st.subheader("👤 Personalized Profile Settings")
+    st.markdown("---")
+    
+    # Input fields
     name = st.text_input("Name", value=st.session_state.profile.get("name", ""), key="profile_name")
-with profile_cols[1]:
     age = st.text_input("Age", value=st.session_state.profile.get("age", 25), key="profile_age")
-with profile_cols[2]:
     weight = st.text_input("Weight (kg)", value=st.session_state.profile.get("weight", 70), key="profile_weight")
-with profile_cols[3]:
+    
     gender_options = ["Male", "Female", "Other", "Prefer not to say"]
     current_gender = st.session_state.profile.get("gender", "Prefer not to say")
     gender_index = gender_options.index(current_gender) if current_gender in gender_options else 3
     gender = st.selectbox("Gender", gender_options, index=gender_index, key="profile_gender")
-with profile_cols[4]:
+    
     goal_options = ["Muscle gain", "Weight loss", "Endurance", "General health"]
     current_goal = st.session_state.profile.get("goal", "Weight loss")
     goal_index = goal_options.index(current_goal) if current_goal in goal_options else 1 
     goal = st.selectbox("Primary Goal", goal_options, index=goal_index, key="profile_goal")
-with profile_cols[5]:
+    
     level_options = ["Beginner", "Intermediate", "Advanced"]
     current_level = st.session_state.profile.get("level", "Beginner")
     level_index = level_options.index(current_level) if current_level in level_options else 0
     level = st.selectbox("Level", level_options, index=level_index, key="profile_level")
 
-# Auto-update profile state on input change
-st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level, "gender": gender})
-st.info(f"**Profile Set:** Goal: **{st.session_state.profile['goal']}** | Gender: **{st.session_state.profile['gender']}**. Ask a question below for personalized advice.")
+    # Display confirmation in sidebar
+    st.markdown("---")
+    st.session_state.profile.update({"name": name, "age": age, "weight": weight, "goal": goal, "level": level, "gender": gender})
+    st.success("Profile Updated")
+    st.markdown(f"**Goal:** {st.session_state.profile['goal']}")
+    st.markdown(f"**Level:** {st.session_state.profile['level']}")
 
 
 # --- Load KB and Models (Cached) ---
@@ -278,7 +280,7 @@ if not GOOGLE_KEY:
     st.error("Setup Error: GOOGLE_API_KEY environment variable is missing. Please set it in your .env file.")
     st.stop()
     
-with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index from disk..."):
+with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index..."):
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore_from_text(kb_text)
     llm, llm_chain = create_llm_and_chain()
@@ -288,29 +290,27 @@ with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS ind
         st.stop()
 
 
-# --- Quick Start Buttons ---
-st.markdown("---")
+# --- Quick Start Buttons (Main Content Area) ---
 st.subheader("💡 Quick Start Questions")
 button_cols = st.columns(len(FAQ_QUERIES))
 btn_keys = list(FAQ_QUERIES.keys())
 for i, c in enumerate(button_cols):
     if i < len(btn_keys):
         q_label = btn_keys[i]
-        if c.button(q_label):
+        # Use a lambda function wrapper to avoid button key collision
+        if c.button(q_label, key=f"quick_btn_{q_label}"): 
             st.session_state["last_quick"] = FAQ_QUERIES[q_label]
             st.rerun() 
 
 # --- Main Chat Input ---
-# Use the buffer if a quick button was clicked, otherwise use the text input
 initial_input = st.session_state.pop("last_quick", "") 
 # st.chat_input handles submission via Enter key
 user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
                             key="main_input", 
                             max_chars=2000)
 
-# Workaround for setting initial value from quick button
+# Workaround for quick button submission
 if initial_input and initial_input != user_query:
-    # If a quick button was pressed, run the pipeline with the stored question
     user_query = initial_input
 
 
@@ -328,14 +328,14 @@ if user_query and user_query.strip():
     # Rerun to clear the chat_input and populate the history display cleanly
     st.rerun() 
 
-# --- Display History ---
+# --- Display History (Main Content Area) ---
 st.markdown("---")
 st.subheader("💬 Conversation History")
 
 # Inject the daily tip as the first message if no conversation exists
 if not st.session_state.history:
     st.markdown(f"**FitBot:** Hello! I am FitBot, your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
-    st.info("Set your profile above for personalized advice!")
+    st.info("Set your profile in the sidebar for personalized advice!")
 else:
     # Display reverse chronological order
     for turn in reversed(st.session_state.history): 
