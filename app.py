@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 # --- Configuration ---
 # Path for FAISS index persistence (Caches index to local disk for fast restarts)
 FAISS_INDEX_PATH = "faiss_index.bin"
+FAISS_FOLDER_PATH = "."
 
 # Load environment variables
 load_dotenv(".env")
@@ -99,19 +100,25 @@ def build_vectorstore_from_text(text: str):
     """
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     
-    if os.path.exists(FAISS_INDEX_PATH):
+    # Check if index exists on disk
+    if os.path.exists(FAISS_FOLDER_PATH) and any(f.startswith(FAISS_INDEX_PATH) for f in os.listdir(FAISS_FOLDER_PATH)):
         # Load instantly from disk 
-        vectorstore = FAISS.load_local(".", embeddings, FAISS_INDEX_PATH)
-        return vectorstore
+        try:
+            vectorstore = FAISS.load_local(FAISS_FOLDER_PATH, embeddings, FAISS_INDEX_PATH)
+            return vectorstore
+        except Exception:
+            # Fallback if load fails (e.g., corrupted file), proceed to rebuild
+            pass
 
-    # If file not found, build index (slow, runs only once)
+
+    # If file not found or load failed, build index (slow, runs only once)
     splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     docs = splitter.create_documents([text])
     
     vectorstore = FAISS.from_documents(docs, embeddings)
     
-    # Save to disk for persistence
-    vectorstore.save_local(".", embeddings=embeddings, index_name=FAISS_INDEX_PATH)
+    # Save to disk for persistence (FIXED: removed redundant 'embeddings' argument)
+    vectorstore.save_local(FAISS_FOLDER_PATH, index_name=FAISS_INDEX_PATH)
     return vectorstore
 
 # -----------------------------
