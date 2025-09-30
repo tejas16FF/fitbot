@@ -15,7 +15,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import AIMessage, HumanMessage 
 
 # --- Configuration ---
-# Path for FAISS index persistence
+# Path for FAISS index persistence (Caches index to local disk for fast restarts)
 FAISS_INDEX_PATH = "faiss_index.bin"
 
 # Load environment variables
@@ -65,11 +65,11 @@ DAILY_TIPS = [
 # Session-state initialization
 # -----------------------------
 if "history" not in st.session_state:
-    # history: list of dictionaries representing conversation turns
+    # history: list of dictionaries representing conversation turns (memory)
     st.session_state.history = []
 
 if "profile" not in st.session_state:
-    # Initialize full profile, including level and gender
+    # Initialize full profile, including gender/level for personalization
     st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "Weight loss", "level": "Beginner", "gender": "Prefer not to say"} 
 
 if "vectorstore_built" not in st.session_state:
@@ -95,12 +95,12 @@ def read_knowledge_base(path="data.txt") -> str:
 def build_vectorstore_from_text(text: str):
     """
     Splits text, creates embeddings, builds FAISS index, and persists it to disk.
-    If the index exists on disk, it is loaded instantly.
+    If the index exists on disk, it is loaded instantly (CRITICAL for fast restarts).
     """
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     
     if os.path.exists(FAISS_INDEX_PATH):
-        # Load instantly from disk (fast)
+        # Load instantly from disk 
         vectorstore = FAISS.load_local(".", embeddings, FAISS_INDEX_PATH)
         return vectorstore
 
@@ -111,7 +111,7 @@ def build_vectorstore_from_text(text: str):
     vectorstore = FAISS.from_documents(docs, embeddings)
     
     # Save to disk for persistence
-    vectorstore.save_local(".", FAISS_INDEX_PATH)
+    vectorstore.save_local(".", embeddings=embeddings, index_name=FAISS_INDEX_PATH)
     return vectorstore
 
 # -----------------------------
@@ -125,11 +125,10 @@ def create_llm_and_chain():
     llm = ChatGoogleGenerativeAI(
         model=CHAT_MODEL,
         google_api_key=GOOGLE_KEY,
-        temperature=0.2  # lower temperature for reliable answers
+        temperature=0.2  # lower temperature for reliable, factual answers
     )
 
-    # Prompt template includes profile and chat_history (so bot can personalize & remember)
-    # Added {gender} to the prompt structure
+    # Full Prompt Template: Includes Profile, Level, Gender, and Chat History for personalization and memory
     template = """
 You are FitBot, a professional and friendly AI fitness coach. Respond in a helpful, supportive,
 and safe manner. NEVER mention internal mechanics (like "knowledge base", "context", or "retrieved docs").
@@ -177,7 +176,7 @@ def format_history(history: List[dict], max_turns: int = 6) -> str:
     return "\n".join(lines) if lines else "No previous conversation turns."
 
 # -----------------------------
-# Retrieve & answer (manual RAG — we control variables passed to LLM)
+# Retrieve & answer (manual RAG Pipeline)
 # -----------------------------
 def retrieve_relevant_context(vectorstore, query: str, k: int = 3) -> str:
     """
@@ -191,15 +190,15 @@ def retrieve_relevant_context(vectorstore, query: str, k: int = 3) -> str:
 
 def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dict, history: List[dict]):
     """Retrieve context, format prompt inputs, call LLM chain, and return answer string."""
-    # 1) retrieve context based on the new query + potentially last turn of history
-    # Augment query with last turn for better retrieval, especially for follow-up questions
+    
+    # Augment query with last turn for better retrieval (contextual retrieval)
     context_query = f"{history[-1]['user'] if history else ''} {query}" 
     context = retrieve_relevant_context(vectorstore, context_query, k=3) 
     
     if not context.strip():
         context = "General fitness knowledge is used if specific context is unavailable."
 
-    # 2) format history & profile
+    # 2) format history & profile strings
     chat_history_str = format_history(history)
     profile_str = f"Name: {profile.get('name','')}; Age: {profile.get('age','')}; Weight: {profile.get('weight','')}; Goal: {profile.get('goal','')}"
     
@@ -207,8 +206,8 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
         # 3) run chain (execute LLM)
         answer = chain.predict(
             profile=profile_str, 
-            level=profile.get('level', 'Beginner'), # Pass level for structured advice
-            gender=profile.get('gender', 'Prefer not to say'), # Pass gender for enhanced personalization
+            level=profile.get('level', 'Beginner'), 
+            gender=profile.get('gender', 'Prefer not to say'), 
             chat_history=chat_history_str, 
             context=context, 
             question=query
@@ -220,7 +219,7 @@ def answer_query_pipeline(chain: LLMChain, vectorstore, query: str, profile: dic
     return answer
 
 # -----------------------------
-# Seeds: Frequently Asked Questions (Replaced by Buttons)
+# Seeds: Frequently Asked Questions (Buttons)
 # -----------------------------
 FAQ_QUERIES = {
     "3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
@@ -282,8 +281,7 @@ with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS ind
         st.stop()
 
 
-# --- Replaced FAQ Dropdown with Buttons (Below Profile, Above Chat Input) ---
-
+# --- Quick Start Buttons ---
 st.markdown("---")
 st.subheader("💡 Quick Start Questions")
 button_cols = st.columns(len(FAQ_QUERIES))
@@ -298,14 +296,18 @@ for i, c in enumerate(button_cols):
 # --- Main Chat Input ---
 # Use the buffer if a quick button was clicked, otherwise use the text input
 initial_input = st.session_state.pop("last_quick", "") 
-# Use st.chat_input, which automatically handles submission via Enter key
+# st.chat_input handles submission via Enter key
 user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", 
                             key="main_input", 
-                            max_chars=2000, 
-                            value=initial_input)
+                            max_chars=2000)
+
+# Workaround for setting initial value from quick button
+if initial_input and initial_input != user_query:
+    # If a quick button was pressed, run the pipeline with the stored question
+    user_query = initial_input
 
 
-# --- Handle Execution (Triggered by Enter Key on chat_input) ---
+# --- Handle Execution (Triggered by Enter Key on chat_input OR Quick Button Workaround) ---
 if user_query and user_query.strip():
     # 1. Run pipeline
     with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
