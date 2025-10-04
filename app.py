@@ -22,8 +22,7 @@ FAISS_FOLDER_PATH = "."
 # Load environment variables
 load_dotenv(".env")
 
-# The user-provided key is prioritized in session state later.
-# This developer key is only for fallback/internal testing.
+# The developer's key is used automatically since the user is not providing one.
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY") 
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
@@ -209,11 +208,6 @@ def page_profile_setup():
         st.subheader("Personal Details")
         name = st.text_input("Name", value=st.session_state.profile.get("name", ""))
         
-        # User API Key Gating (Authentication)
-        api_key = st.text_input("Gemini API Key (Required for Chat)", 
-                                type="password", 
-                                value=st.session_state.get('user_api_key', ''))
-
         st.subheader("Fitness Metrics")
         age = st.text_input("Age (Years)", value=str(st.session_state.profile.get("age", 25)))
         weight = st.text_input("Weight (kg)", value=str(st.session_state.profile.get("weight", 70)))
@@ -229,7 +223,7 @@ def page_profile_setup():
         
         submitted = st.form_submit_button("Start Chatting!")
     
-    if submitted and all([name, age, weight, api_key]):
+    if submitted and all([name, age, weight]):
         st.session_state.profile.update({
             "name": name,
             "age": age,
@@ -238,11 +232,12 @@ def page_profile_setup():
             "level": level,
             "gender": gender
         })
-        st.session_state.user_api_key = api_key # Save the user's key
+        # Use the developer's key (GOOGLE_KEY) since the user is not providing one.
+        st.session_state.user_api_key = GOOGLE_KEY 
         st.session_state.profile_submitted = True
         st.rerun()
     elif submitted:
-        st.error("Please fill in all required fields (including the Gemini API Key) to continue.")
+        st.error("Please fill in your name, age, and weight to continue.")
 
 # -----------------------------
 # --- Page 2: Main Chat Page ---
@@ -250,9 +245,9 @@ def page_profile_setup():
 def page_main_chat(user_api_key):
     
     # --- Load RAG components (cached) ---
-    llm_key = user_api_key if user_api_key else GOOGLE_KEY
+    llm_key = user_api_key 
     if not llm_key:
-        st.error("Access Denied: Please provide a Gemini API key in the Profile Setup.")
+        st.error("Fatal Error: Developer GOOGLE_API_KEY is not set in the environment. Please check .env file.")
         return
         
     with st.spinner(f"Preparing RAG components: loading knowledge base and FAISS index..."):
@@ -261,21 +256,21 @@ def page_main_chat(user_api_key):
         llm, llm_chain = create_llm_and_chain(llm_key)
         
         if llm_chain is None:
-            st.error("Setup Error: Failed to initialize LLM. Check API key validity or model name.")
+            st.error("Setup Error: Failed to initialize LLM. Check developer's API key validity.")
             return
 
-    # --- Layout: Main columns ---
+    # --- Layout: Main columns (Active Chat: 2 parts, History: 1 part) ---
     col_chat, col_history = st.columns([2, 1])
 
     # --- LEFT SIDEBAR: PROFILE ---
     with st.sidebar:
-        st.subheader("👤 Profile Settings")
+        st.subheader("👤 Your Profile")
         st.markdown("---")
         st.markdown(f"**Name:** {st.session_state.profile['name']}")
         st.markdown(f"**Goal:** {st.session_state.profile['goal']}")
         st.markdown(f"**Level:** {st.session_state.profile['level']}")
         st.markdown("---")
-        if st.button("Change Profile / API Key", use_container_width=True):
+        if st.button("Change Profile", use_container_width=True):
             st.session_state.profile_submitted = False
             st.session_state.selected_turn_index = -1 # Clear selection
             st.rerun()
@@ -291,7 +286,7 @@ def page_main_chat(user_api_key):
         history_labels.append("Ask New Question")
         
         # Default selection: the last question if history exists, or 'Ask New Question'
-        default_index = len(st.session_state.history) 
+        default_index = len(st.session_state.history) if st.session_state.selected_turn_index == -1 else st.session_state.selected_turn_index
         
         # Update selection tracker based on radio click
         selected_label = st.radio(
@@ -307,6 +302,12 @@ def page_main_chat(user_api_key):
             st.session_state.selected_turn_index = -1
         else:
             st.session_state.selected_turn_index = history_labels.index(selected_label)
+            
+        st.markdown("---")
+        if st.button("Clear All History", use_container_width=True):
+            st.session_state.history = []
+            st.session_state.selected_turn_index = -1
+            st.rerun()
 
     # --- CENTER COLUMN: ACTIVE CHAT / SELECTED ANSWER ---
     with col_chat:
@@ -315,9 +316,8 @@ def page_main_chat(user_api_key):
         st.markdown("---")
 
         if st.session_state.selected_turn_index == -1:
-            # --- Display New Chat View ---
+            # --- Display New Chat View (Center Column) ---
             
-            # Display Daily Tip
             if not st.session_state.history:
                  st.markdown(f"**FitBot:** Hello! I'm your AI fitness coach. **{st.session_state.initial_tip}** How can I support your goals today?")
             else:
@@ -331,7 +331,7 @@ def page_main_chat(user_api_key):
                     q_label = btn_keys[i]
                     if c.button(q_label):
                         st.session_state["last_quick"] = FAQ_QUERIES[q_label]
-                        st.session_state.selected_turn_index = -1 # Ensure we are on active chat view
+                        st.session_state.selected_turn_index = -1 
                         st.rerun() 
                         
             # Main Chat Input (Triggered by Enter Key)
@@ -348,13 +348,21 @@ def page_main_chat(user_api_key):
                     resp = answer_query_pipeline(llm_chain, vectorstore, final_query, st.session_state.profile, st.session_state.history)
                     latency = time.time() - start
 
-                # Save history and switch to history view (optional, but good for UX)
+                # Save history and select the new turn
                 st.session_state.history.append({"user": final_query, "assistant": resp, "time": latency})
-                st.session_state.selected_turn_index = len(st.session_state.history) - 1 # Select the new turn
+                st.session_state.selected_turn_index = len(st.session_state.history) - 1 
                 st.rerun()
+            
+            # Show the latest active conversation only
+            if st.session_state.history and st.session_state.selected_turn_index == len(st.session_state.history) - 1:
+                latest_turn = st.session_state.history[-1]
+                with st.chat_message("user"):
+                    st.markdown(latest_turn['user'])
+                with st.chat_message("assistant"):
+                    st.markdown(latest_turn['assistant'])
                 
         else:
-            # --- Display Selected History Section ---
+            # --- Display Selected History Section (Center Column) ---
             
             selected_turn = st.session_state.history[st.session_state.selected_turn_index]
             
@@ -362,13 +370,13 @@ def page_main_chat(user_api_key):
             with st.chat_message("user"):
                 st.markdown(selected_turn['user'])
             
-            st.subheader("FitBot Response:")
+            st.subheader("FitBot Full Response:")
             with st.chat_message("assistant"):
                 st.markdown(selected_turn['assistant'])
             
             st.caption(f"⏱️ Response Time: {selected_turn.get('time', 0):.2f}s")
             st.markdown("---")
-            if st.button("Back to New Question", use_container_width=True):
+            if st.button("Ask a New Question", use_container_width=True):
                 st.session_state.selected_turn_index = -1
                 st.rerun()
 
@@ -378,9 +386,9 @@ def page_main_chat(user_api_key):
 if st.session_state.profile_submitted:
     page_main_chat(st.session_state.user_api_key)
 else:
+    st.set_page_config(page_title="FitBot", page_icon="💪", layout="centered")
     page_profile_setup()
     
-# Footer (Optional: Only display on Main Chat page if logged in)
-if st.session_state.profile_submitted:
-    st.markdown("---")
-    st.caption("FitBot — Capstone Project (RAG, Memory, Personalization). Always consult a licensed professional for medical issues.")
+# Footer (Display globally)
+st.markdown("---")
+st.caption("FitBot — Capstone Project (RAG, Memory, Personalization). Always consult a licensed professional for medical issues.")
