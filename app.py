@@ -20,7 +20,9 @@ load_dotenv(".env")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
-# Fallback data
+# -----------------------------
+# KNOWLEDGE BASE & DYNAMIC DATA
+# -----------------------------
 FALLBACK_KB = """
 BEGIN FITNESS KB
 Day 1: Squats (3x10), Push-ups (3x8), Plank (3x30s)
@@ -30,15 +32,21 @@ Nutrition: High protein diet, avoid processed sugar.
 END FITNESS KB
 """
 
+# ✅ Extended Motivational Tips
 DAILY_TIPS = [
     "💡 Stay hydrated — your muscles need water to perform well!",
     "🔥 Small progress each day adds up to big results!",
-    "🧘 Breathe deep and focus — fitness is a journey, not a race.",
-    "💪 Consistency is the real secret — keep going!",
-    "🥗 Fuel your body — nutrition is half the battle.",
-    "🏋️ Remember, rest days are part of the plan!",
+    "🧘 Focus on your form, not the weight. Perfect form builds strength safely!",
+    "🏋️ You don’t have to be extreme, just consistent.",
+    "🥗 Nutrition fuels your body — eat smart, not less.",
+    "💪 Every rep counts — stay disciplined, not motivated.",
+    "🧠 Rest days recharge your progress. Don’t skip recovery!",
+    "🚶 Take a walk after meals to aid digestion.",
+    "📈 Track your progress weekly — results build slowly, but surely.",
+    "🕐 Time and patience beat intensity and shortcuts.",
 ]
 
+# ✅ Extended FAQ Queries
 FAQ_QUERIES = {
     "💪 Beginner Plan": "Give me a 3-day beginner workout plan.",
     "🍎 Post-workout Meal": "What’s a good meal after exercise?",
@@ -46,10 +54,19 @@ FAQ_QUERIES = {
     "🧘 Yoga Routine": "Give me a 10-minute morning yoga stretch plan.",
     "💧 Hydration": "How much water should I drink per day?",
     "⏱️ Sleep": "Why is sleep important for muscle recovery?",
+    "🍽️ Calorie Intake": "How do I calculate my daily calorie needs?",
+    "🏃 Cardio Routine": "Give me a 20-minute fat-burning cardio plan.",
+    "🍳 Protein Sources": "List best vegetarian protein sources.",
+    "🥤 Supplements": "Should I use protein shakes for weight loss?",
+    "😴 Recovery Tips": "What are best recovery tips after intense workout?",
+    "⚖️ Fat Loss vs Muscle Gain": "How can I lose fat without losing muscle?",
+    "🏋️ Strength Plan": "Give me a 4-day strength training split.",
+    "🥗 Balanced Diet": "What should a balanced diet include for daily fitness?",
+    "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout.",
 }
 
 # -----------------------------
-# SESSION STATE SETUP
+# SESSION STATE INITIALIZATION
 # -----------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -167,7 +184,7 @@ def page_chat():
     st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
     st.title("💬 FitBot — Your AI Fitness Assistant")
 
-    # --- LEFT SIDEBAR: PROFILE ---
+    # LEFT SIDEBAR — Profile
     with st.sidebar:
         st.header("👤 Profile")
         for k, v in st.session_state.profile.items():
@@ -176,7 +193,7 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.rerun()
 
-    # --- RIGHT SIDEBAR: HISTORY ---
+    # RIGHT SIDEBAR — History
     st.sidebar.header("📜 Chat History")
     if not st.session_state.history:
         st.sidebar.info("No chats yet. Start asking below 👇")
@@ -190,14 +207,14 @@ def page_chat():
             st.session_state.history = []
             st.rerun()
 
-    # --- CENTER: CHAT AREA ---
+    # CENTER — Chat
     st.markdown("### 💡 Ask me about workouts, diet, or motivation")
 
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore(kb_text)
     llm, chain = create_llm_chain(GOOGLE_KEY)
 
-    # --- Randomize FAQs each reload ---
+    # Randomize FAQ Buttons each time
     faq_items = random.sample(list(FAQ_QUERIES.items()), 4)
     cols = st.columns(len(faq_items))
     for i, (label, query) in enumerate(faq_items):
@@ -209,32 +226,30 @@ def page_chat():
     if user_query or "last_quick" in st.session_state:
         query = user_query or st.session_state.pop("last_quick")
 
-        # --- Animated motivational loader ---
-        tip_script = """
+        # ✅ Motivational Loading Tip (Dark/Light mode auto)
+        text_color = "#FFFFFF" if st.get_option("theme.base") == "dark" else "#000000"
+        tip_script = f"""
+        <div style='text-align:center; font-size:20px; color:{text_color}; padding:10px; transition:opacity 1s;' id='tip'>
+            💭 {random.choice(DAILY_TIPS)}
+        </div>
         <script>
-        const tips = %s;
+        const tips = {DAILY_TIPS};
         let idx = 0;
         const tipBox = document.getElementById("tip");
-        function changeTip() {
+        function changeTip() {{
             tipBox.style.opacity = 0;
-            setTimeout(() => {
+            setTimeout(() => {{
                 tipBox.innerText = tips[idx];
                 tipBox.style.opacity = 1;
-                idx = (idx + 1) %% tips.length;
-            }, 500);
-        }
+                idx = (idx + 1) % tips.length;
+            }}, 500);
+        }}
         setInterval(changeTip, 3000);
         </script>
-        """ % DAILY_TIPS
+        """
+        html(tip_script, height=100)
 
-        html(f"""
-        <div style='text-align:center; font-size:20px; padding:10px; transition:opacity 1s;' id='tip'>
-            💭 Getting your personalized advice...
-        </div>
-        {tip_script}
-        """, height=100)
-
-        with st.spinner(""):
+        with st.spinner("Generating your personalized answer..."):
             start = time.time()
             answer = generate_answer(chain, vectorstore, query, st.session_state.profile, st.session_state.history)
             latency = time.time() - start
@@ -243,7 +258,7 @@ def page_chat():
         st.success(answer)
 
 # -----------------------------
-# PAGE CONTROL
+# CONTROL FLOW
 # -----------------------------
 if not st.session_state.profile_submitted:
     page_profile()
