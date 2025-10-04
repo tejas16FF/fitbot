@@ -14,7 +14,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # --- Configuration ---
 FAISS_INDEX_PATH = "faiss_index.bin"
 FAISS_FOLDER_PATH = "."
-UNIVERSAL_TIP_COLOR = "#4CAF50" # Professional supportive green
+# *** FINAL COLOR ***: Vibrant Amber/Gold (#FFC107) for high contrast and energy
+UNIVERSAL_TIP_COLOR = "#FFC107" 
 
 load_dotenv(".env")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY") 
@@ -32,6 +33,7 @@ Nutrition: High protein diet, avoid processed sugar.
 END FITNESS KB
 """
 
+# ✅ Extended Motivational Tips
 DAILY_TIPS = [
     "💡 Stay hydrated — your muscles need water to perform well!",
     "🔥 Small progress each day adds up to big results!",
@@ -45,6 +47,7 @@ DAILY_TIPS = [
     "🕐 Time and patience beat intensity and shortcuts.",
 ]
 
+# ✅ Extended FAQ Queries
 FAQ_QUERIES = {
     "💪 Beginner Plan": "Give me a 3-day beginner workout plan.",
     "🍎 Post-workout Meal": "What’s a good meal after exercise?",
@@ -123,13 +126,13 @@ You are FitBot, a professional and friendly AI fitness coach. Respond in a helpf
 If very specific medical guidance is requested, give a general guideline and recommend consulting a professional.
 If the question is completely out of scope, politely refuse and state your specialization: "I specialize in fitness and wellness."
 
-User profile (if available): {profile}
+User Profile: {profile}
 Fitness Level: {level}
 Gender: {gender}
 
 Conversation so far: {chat_history}
-Relevant information: {context}
-User question: {question}
+Context: {context}
+User Question: {question}
 
 Provide detailed, helpful, and encouraging answers.
 """
@@ -242,9 +245,6 @@ def page_chat():
             st.error("Setup Error: Failed to initialize LLM. Check developer's API key validity.")
             return
 
-    # --- Layout: Active Chat (Center) and History Index (Right Sidebar) ---
-    col_chat, col_history_index = st.columns([3, 1])
-
     # --- LEFT SIDEBAR (Native): PROFILE ---
     with st.sidebar:
         st.subheader("👤 Your Profile")
@@ -256,6 +256,9 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.session_state.selected_turn_index = -1
             st.rerun()
+
+    # --- Layout: Main Content (Active Chat) and Right Column (History Index) ---
+    col_chat, col_history_index = st.columns([2, 1]) # 2/3 for chat, 1/3 for history index
 
     # --- RIGHT COLUMN (INDEX): INTERACTIVE HISTORY ---
     with col_history_index:
@@ -289,7 +292,7 @@ def page_chat():
     # --- CENTER COLUMN (CHAT): ACTIVE CONVERSATION ---
     with col_chat:
         
-        # Display Motivational Tip (Fixed Color)
+        # Display Motivational Tip (FIXED COLOR: #FFC107 - Amber)
         tip_html = f"""
         <div style="text-align:center; padding:10px 0; font-size:16px; color: {UNIVERSAL_TIP_COLOR}; font-weight: bold;">
             {st.session_state.tip_of_the_day}
@@ -298,17 +301,19 @@ def page_chat():
         st.markdown(tip_html, unsafe_allow_html=True)
 
 
-        # --- QUICK START BUTTONS ---
+        # --- QUICK START BUTTONS (FIXED LOGIC) ---
         st.markdown("---")
         st.markdown("**Quick Start Questions:**")
-        button_cols = st.columns(5) # Changed to 5 columns for layout stability
+        button_cols = st.columns(5)
         faq_items = list(FAQ_QUERIES.items())
         
         for i in range(len(button_cols)):
-            if i < len(faq_items):
+            if i < 5 and i < len(faq_items):
                 label, query = faq_items[i]
+                # FIX: Use key to ensure all buttons work and store the query
                 if button_cols[i].button(label, key=f"faq_{i}"):
                     st.session_state["last_quick"] = query
+                    st.session_state.selected_turn_index = -1 
                     st.rerun() 
         st.markdown("---")
 
@@ -316,7 +321,7 @@ def page_chat():
             # --- Display New Chat View ---
             st.subheader("Start a New Conversation")
             
-            # Main Chat Input (If active chat view)
+            # Main Chat Input 
             initial_input = st.session_state.pop("last_quick", "") 
             user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input")
 
@@ -332,11 +337,11 @@ def page_chat():
 
                 # Save history and select the new turn (switches view to show full response)
                 st.session_state.history.append({"user": final_query, "assistant": resp, "time": latency})
-                st.session_state.selected_turn_index = len(st.session_state.history) - 1 
+                st.session_state.selected_turn_index = len(st.session_state.history) - 1 # Select the new turn
                 st.rerun()
                 
-            # Placeholder for active chat (will be immediately replaced on rerun)
-            if st.session_state.history:
+            # Show the latest active conversation only
+            if st.session_state.history and st.session_state.selected_turn_index == len(st.session_state.history) - 1:
                 latest_turn = st.session_state.history[-1]
                 with st.chat_message("user"):
                     st.markdown(latest_turn['user'])
@@ -360,7 +365,6 @@ def page_chat():
             if st.button("Ask a New Question", key="back_to_new_q"):
                 st.session_state.selected_turn_index = -1
                 st.rerun()
-
 
 # -----------------------------
 # CONTROL FLOW
