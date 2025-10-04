@@ -10,11 +10,12 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
+from streamlit.components.v1 import html # Used for custom coloring
 
 # --- Configuration ---
 FAISS_INDEX_PATH = "faiss_index.bin"
 FAISS_FOLDER_PATH = "."
-# *** FINAL COLOR ***: Vibrant Amber/Gold (#FFC107) for high contrast and energy
+# FINAL COLOR: Vibrant Amber/Gold (#FFC107) for high contrast and energy
 UNIVERSAL_TIP_COLOR = "#FFC107" 
 
 load_dotenv(".env")
@@ -131,7 +132,7 @@ Fitness Level: {level}
 Gender: {gender}
 
 Conversation so far: {chat_history}
-Context: {context}
+Relevant information: {context}
 User Question: {question}
 
 Provide detailed, helpful, and encouraging answers.
@@ -245,8 +246,9 @@ def page_chat():
             st.error("Setup Error: Failed to initialize LLM. Check developer's API key validity.")
             return
 
-    # --- LEFT SIDEBAR (Native): PROFILE ---
+    # --- LEFT SIDEBAR (Native): PROFILE & HISTORY (COMBINED) ---
     with st.sidebar:
+        # Profile Section
         st.subheader("👤 Your Profile")
         st.markdown("---")
         for k, v in st.session_state.profile.items():
@@ -257,11 +259,7 @@ def page_chat():
             st.session_state.selected_turn_index = -1
             st.rerun()
 
-    # --- Layout: Main Content (Active Chat) and Right Column (History Index) ---
-    col_chat, col_history_index = st.columns([2, 1]) # 2/3 for chat, 1/3 for history index
-
-    # --- RIGHT COLUMN (INDEX): INTERACTIVE HISTORY ---
-    with col_history_index:
+        # History Index Section (Now directly below the profile in the same sidebar)
         st.subheader("📚 History Index")
         st.caption("Click a question to view the full response.")
         
@@ -289,91 +287,90 @@ def page_chat():
             st.session_state.selected_turn_index = -1
             st.rerun()
 
-    # --- CENTER COLUMN (CHAT): ACTIVE CONVERSATION ---
-    with col_chat:
+
+    # --- Main Content Area (Active Chat / Selected Answer) ---
         
-        # Display Motivational Tip (FIXED COLOR: #FFC107 - Amber)
-        tip_html = f"""
-        <div style="text-align:center; padding:10px 0; font-size:16px; color: {UNIVERSAL_TIP_COLOR}; font-weight: bold;">
-            {st.session_state.tip_of_the_day}
-        </div>
-        """
-        st.markdown(tip_html, unsafe_allow_html=True)
+    # Display Motivational Tip (Fixed Color and structure)
+    tip_html = f"""
+    <div style="text-align:center; padding:10px 0; font-size:16px; color: {UNIVERSAL_TIP_COLOR}; font-weight: bold;">
+        {st.session_state.tip_of_the_day}
+    </div>
+    """
+    st.markdown(tip_html, unsafe_allow_html=True)
 
 
-        # --- QUICK START BUTTONS (FIXED LOGIC) ---
-        st.markdown("---")
-        st.markdown("**Quick Start Questions:**")
-        button_cols = st.columns(5)
-        faq_items = list(FAQ_QUERIES.items())
+    # --- QUICK START BUTTONS (FIXED LOGIC) ---
+    st.markdown("---")
+    st.markdown("**Quick Start Questions:**")
+    button_cols = st.columns(5)
+    faq_items = list(FAQ_QUERIES.items())
+    
+    for i in range(len(button_cols)):
+        if i < 5 and i < len(faq_items):
+            label, query = faq_items[i]
+            if button_cols[i].button(label, key=f"faq_{i}"):
+                st.session_state["last_quick"] = query
+                st.session_state.selected_turn_index = -1 
+                st.rerun() 
+    st.markdown("---")
+
+    if st.session_state.selected_turn_index == -1:
+        # --- Display New Chat View ---
+        st.subheader("Start a New Conversation")
         
-        for i in range(len(button_cols)):
-            if i < 5 and i < len(faq_items):
-                label, query = faq_items[i]
-                # FIX: Use key to ensure all buttons work and store the query
-                if button_cols[i].button(label, key=f"faq_{i}"):
-                    st.session_state["last_quick"] = query
-                    st.session_state.selected_turn_index = -1 
-                    st.rerun() 
-        st.markdown("---")
+        # Main Chat Input 
+        initial_input = st.session_state.pop("last_quick", "") 
+        user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input")
 
-        if st.session_state.selected_turn_index == -1:
-            # --- Display New Chat View ---
-            st.subheader("Start a New Conversation")
+        # Handle execution (Quick Button OR Enter Key)
+        if user_query or initial_input:
+            final_query = user_query if user_query else initial_input
             
-            # Main Chat Input 
-            initial_input = st.session_state.pop("last_quick", "") 
-            user_query = st.chat_input("Ask FitBot your question (Press Enter to submit):", key="main_input")
+            # Run pipeline
+            with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
+                start = time.time()
+                resp = generate_answer(llm_chain, vectorstore, final_query, st.session_state.profile, st.session_state.history)
+                latency = time.time() - start
 
-            # Handle execution (Quick Button OR Enter Key)
-            if user_query or initial_input:
-                final_query = user_query if user_query else initial_input
-                
-                # Run pipeline
-                with st.spinner(f"🤔 Thinking with Gemini, retrieving context..."):
-                    start = time.time()
-                    resp = generate_answer(llm_chain, vectorstore, final_query, st.session_state.profile, st.session_state.history)
-                    latency = time.time() - start
-
-                # Save history and select the new turn (switches view to show full response)
-                st.session_state.history.append({"user": final_query, "assistant": resp, "time": latency})
-                st.session_state.selected_turn_index = len(st.session_state.history) - 1 # Select the new turn
-                st.rerun()
-                
-            # Show the latest active conversation only
-            if st.session_state.history and st.session_state.selected_turn_index == len(st.session_state.history) - 1:
-                latest_turn = st.session_state.history[-1]
-                with st.chat_message("user"):
-                    st.markdown(latest_turn['user'])
-                with st.chat_message("assistant"):
-                    st.markdown(latest_turn['assistant'])
-
-        else:
-            # --- Display Selected History Section ---
-            selected_turn = st.session_state.history[st.session_state.selected_turn_index]
+            # Save history and select the new turn (switches view to show full response)
+            st.session_state.history.append({"user": final_query, "assistant": resp, "time": latency})
+            st.session_state.selected_turn_index = len(st.session_state.history) - 1 
+            st.rerun()
             
-            st.subheader("Selected Query:")
+        # Show the latest active conversation only
+        if st.session_state.history:
+            latest_turn = st.session_state.history[-1]
             with st.chat_message("user"):
-                st.markdown(selected_turn['user'])
-            
-            st.subheader("FitBot Full Response:")
+                st.markdown(latest_turn['user'])
             with st.chat_message("assistant"):
-                st.markdown(selected_turn['assistant'])
-            
-            st.caption(f"⏱️ Response Time: {selected_turn.get('time', 0):.2f}s")
-            
-            if st.button("Ask a New Question", key="back_to_new_q"):
-                st.session_state.selected_turn_index = -1
-                st.rerun()
+                st.markdown(latest_turn['assistant'])
+
+    else:
+        # --- Display Selected History Section ---
+        selected_turn = st.session_state.history[st.session_state.selected_turn_index]
+        
+        st.subheader("Selected Query:")
+        with st.chat_message("user"):
+            st.markdown(selected_turn['user'])
+        
+        st.subheader("FitBot Full Response:")
+        with st.chat_message("assistant"):
+            st.markdown(selected_turn['assistant'])
+        
+        st.caption(f"⏱️ Response Time: {selected_turn.get('time', 0):.2f}s")
+        
+        if st.button("Ask a New Question", key="back_to_new_q"):
+            st.session_state.selected_turn_index = -1
+            st.rerun()
+
 
 # -----------------------------
 # CONTROL FLOW
 # -----------------------------
-if st.session_state.profile_submitted:
-    page_chat()
-else:
-    st.set_page_config(page_title="FitBot", page_icon="💪", layout="centered")
+if not st.session_state.profile_submitted:
     page_profile_setup()
+else:
+    page_chat()
     
 # Footer (Display globally)
 st.markdown("---")
