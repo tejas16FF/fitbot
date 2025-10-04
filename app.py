@@ -1,34 +1,38 @@
-# app.py — FitBot (Final Refined Version)
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
+from streamlit.components.v1 import html
 
-# ----------------------------- CONFIGURATION -----------------------------
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
 load_dotenv(".env")
+
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
-FAISS_INDEX_PATH = "faiss_index.bin"
-FAISS_FOLDER_PATH = "."
 
-# ----------------------------- KNOWLEDGE BASE -----------------------------
+# -----------------------------
+# KNOWLEDGE BASE & DYNAMIC DATA
+# -----------------------------
 FALLBACK_KB = """
 BEGIN FITNESS KB
-Day 1: Push-ups, Squats, Plank.
-Day 2: Running, Lunges, Jump rope.
-Day 3: Deadlifts, Rows, Stretching.
+Day 1: Squats (3x10), Push-ups (3x8), Plank (3x30s)
+Day 2: Cardio: Running 30 mins, Jump rope 10 mins
+Day 3: Pull-ups (3x5), Dumbbell curls (3x10), Shoulder press (3x8)
+Nutrition: High protein diet, avoid processed sugar.
 END FITNESS KB
 """
 
-# ----------------------------- DAILY TIPS & FAQS -----------------------------
+# ✅ Extended Motivational Tips
 DAILY_TIPS = [
     "💡 Stay hydrated — your muscles need water to perform well!",
     "🔥 Small progress each day adds up to big results!",
@@ -42,6 +46,7 @@ DAILY_TIPS = [
     "🕐 Time and patience beat intensity and shortcuts.",
 ]
 
+# ✅ Extended FAQ Queries
 FAQ_QUERIES = {
     "💪 Beginner Plan": "Give me a 3-day beginner workout plan.",
     "🍎 Post-workout Meal": "What’s a good meal after exercise?",
@@ -60,183 +65,222 @@ FAQ_QUERIES = {
     "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout.",
 }
 
-# ----------------------------- STREAMLIT STATE INIT -----------------------------
+# -----------------------------
+# SESSION STATE INITIALIZATION
+# -----------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
+
 if "profile" not in st.session_state:
     st.session_state.profile = {
         "name": "",
-        "age": 25,
-        "weight": 70,
-        "goal": "Weight loss",
+        "age": "",
+        "weight": "",
+        "goal": "General fitness",
         "level": "Beginner",
-        "gender": "Prefer not to say"
+        "gender": "Prefer not to say",
+        "diet": "No preference",
+        "workout_time": "Morning"
     }
+
 if "profile_submitted" not in st.session_state:
     st.session_state.profile_submitted = False
-if "initial_tip" not in st.session_state:
-    st.session_state.initial_tip = random.choice(DAILY_TIPS)
-if "tip_shown" not in st.session_state:
-    st.session_state.tip_shown = False
 
-# ----------------------------- HELPERS -----------------------------
+# store Tip of the Day when profile is submitted
+if "tip_of_the_day" not in st.session_state:
+    st.session_state.tip_of_the_day = None
+
+# -----------------------------
+# HELPERS
+# -----------------------------
 def read_knowledge_base(path="data.txt") -> str:
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    return FALLBACK_KB
+    return open(path, "r", encoding="utf-8").read() if os.path.exists(path) else FALLBACK_KB
 
 @st.cache_resource(show_spinner=False)
-def build_vectorstore_from_text(text: str):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+def build_vectorstore(text: str):
     splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     docs = splitter.create_documents([text])
-    vectorstore = FAISS.from_documents(docs, embeddings)
-    return vectorstore
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return FAISS.from_documents(docs, embeddings)
 
 @st.cache_resource(show_spinner=False)
 def create_llm_chain(api_key: str):
+    if not api_key:
+        return None, None
     llm = ChatGoogleGenerativeAI(model=CHAT_MODEL, google_api_key=api_key, temperature=0.3)
     template = """
-You are FitBot, a professional and friendly AI fitness coach.
-Always give fitness, diet, and motivation-related advice in a warm, supportive tone.
-Never mention your internal logic or documents.
-User profile: {profile}
+You are FitBot, a professional AI fitness coach.
+Use the user's profile data to give *personalized* responses.
+Be motivating, friendly, and clear.
+Never mention AI or internal details.
+
+User Profile: {profile}
 Conversation so far: {chat_history}
-Relevant info: {context}
-Question: {question}
-Answer:
+Context: {context}
+User Question: {question}
+
+Provide detailed, helpful, and encouraging answers.
 """
-    prompt = PromptTemplate(template=template, input_variables=["profile", "chat_history", "context", "question"])
-    return LLMChain(llm=llm, prompt=prompt)
+    prompt = PromptTemplate(
+        input_variables=["profile", "chat_history", "context", "question"],
+        template=template,
+    )
+    return llm, LLMChain(llm=llm, prompt=prompt)
 
-def format_history(history: List[Dict[str, Union[str, float]]], max_turns=6) -> str:
-    recent = history[-max_turns:]
-    return "\n".join([f"User: {h['user']}\nBot: {h['assistant']}" for h in recent])
-
-def retrieve_context(vectorstore, query, k=3):
+def retrieve_context(vectorstore, query: str, k=3) -> str:
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": k})
     docs = retriever.get_relevant_documents(query)
-    return "\n\n".join(d.page_content for d in docs)
+    return "\n\n---\n\n".join(d.page_content for d in docs)
 
-def answer_query(chain, vectorstore, query, profile, history):
+def format_history(history: List[Dict[str, Any]], limit=6) -> str:
+    recent = history[-limit:]
+    return "\n".join([f"User: {h['user']}\nAssistant: {h['assistant']}" for h in recent])
+
+def generate_answer(chain, vectorstore, query, profile, history):
     context = retrieve_context(vectorstore, query)
-    chat_history = format_history(history)
-    profile_str = f"Name: {profile['name']}, Age: {profile['age']}, Goal: {profile['goal']}, Level: {profile['level']}, Gender: {profile['gender']}"
-    return chain.predict(profile=profile_str, chat_history=chat_history, context=context, question=query)
+    chat_str = format_history(history)
+    profile_str = ", ".join(f"{k}: {v}" for k, v in profile.items() if v)
+    try:
+        return chain.predict(profile=profile_str, chat_history=chat_str, context=context, question=query)
+    except Exception as e:
+        st.error(f"Model Error: {e}")
+        return "⚠️ Sorry, I'm having trouble answering right now. Please try again later."
 
-# ----------------------------- PROFILE PAGE -----------------------------
+# -----------------------------
+# PAGE: PROFILE SETUP
+# -----------------------------
 def page_profile():
-    st.title("🏋️ Welcome to FitBot")
-    st.write("Please enter your details to get personalized fitness guidance 💪")
+    st.title("🏋️ Welcome to FitBot!")
+    st.markdown("Let's personalize your experience 👇")
 
     with st.form("profile_form"):
         name = st.text_input("Your Name", value=st.session_state.profile["name"])
-        age = st.number_input("Age", 10, 80, value=int(st.session_state.profile["age"]))
-        weight = st.number_input("Weight (kg)", 30, 150, value=int(st.session_state.profile["weight"]))
+        age = st.number_input("Age", min_value=10, max_value=80, value=25)
+        weight = st.number_input("Weight (kg)", min_value=30, max_value=200, value=70)
         gender = st.selectbox("Gender", ["Male", "Female", "Other", "Prefer not to say"])
-        goal = st.selectbox("Primary Goal", ["Muscle gain", "Weight loss", "Endurance", "General health"])
-        level = st.selectbox("Fitness Level", ["Beginner", "Intermediate", "Advanced"])
-        submitted = st.form_submit_button("Start FitBot 🚀")
+        goal = st.selectbox("Primary Goal", ["Weight loss", "Muscle gain", "Endurance", "General fitness"])
+        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
+        diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
+        workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"])
 
-    if submitted and all([name, age, weight]):
+        submitted = st.form_submit_button("Start FitBot")
+
+    if submitted:
         st.session_state.profile.update({
             "name": name,
             "age": age,
             "weight": weight,
+            "gender": gender,
             "goal": goal,
             "level": level,
-            "gender": gender
+            "diet": diet,
+            "workout_time": workout_time,
         })
-        st.session_state.user_api_key = GOOGLE_KEY
         st.session_state.profile_submitted = True
+        # set Tip of the Day to show once in main chat
         st.session_state.tip_of_the_day = random.choice(DAILY_TIPS)
+        st.success("✅ Profile saved! Starting FitBot...")
+        time.sleep(1)
         st.rerun()
-    elif submitted:
-        st.error("Please fill in your name, age, and weight to continue.")
 
-# ----------------------------- MAIN CHAT PAGE -----------------------------
+# -----------------------------
+# PAGE: MAIN CHAT
+# -----------------------------
 def page_chat():
-    kb_text = read_knowledge_base("data.txt")
-    vectorstore = build_vectorstore_from_text(kb_text)
-    chain = create_llm_chain(GOOGLE_KEY)
+    st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
+    st.title("💬 FitBot — Your AI Fitness Assistant")
 
-    # Left sidebar — Profile
+    # LEFT SIDEBAR — Profile
     with st.sidebar:
         st.header("👤 Profile")
         for k, v in st.session_state.profile.items():
-            st.write(f"**{k.capitalize()}**: {v}")
+            st.markdown(f"**{k.capitalize()}**: {v}")
         st.markdown("---")
-        if st.button("Edit Profile"):
+        if st.button("✏️ Edit Profile", use_container_width=True):
             st.session_state.profile_submitted = False
             st.rerun()
 
-    # Right sidebar — History
-    with st.sidebar.container():
-        st.header("📚 History")
-        for i, turn in enumerate(st.session_state.history):
-            if st.button(f"Q{i+1}: {turn['user'][:40]}...", key=f"hist_{i}"):
-                st.info(f"**Q:** {turn['user']}\n\n**A:** {turn['assistant']}")
-
-    st.title("💬 Chat with FitBot")
-
-    # 🌟 Tip of the Day popup (shows once)
-    if "tip_of_the_day" in st.session_state:
-        st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
-        del st.session_state.tip_of_the_day
-
-    # FAQ Buttons
-    st.markdown("### ⚡ Quick Fitness Queries")
-    faq_items = random.sample(list(FAQ_QUERIES.items()), 4)
-    faq_cols = st.columns(4)
-    for idx, (label, question) in enumerate(faq_items):
-        if faq_cols[idx].button(label, key=f"faq_button_{idx}_{label}"):
-            st.session_state["last_quick"] = question
+    # RIGHT SIDEBAR — History (expanders)
+    st.sidebar.header("📜 Chat History")
+    if not st.session_state.history:
+        st.sidebar.info("No chats yet. Start asking below 👇")
+    else:
+        # show each question as an expander (click to view Q/A)
+        for i, turn in enumerate(reversed(st.session_state.history)):
+            key = f"hist_exp_{i}"
+            with st.sidebar.expander(f"🧩 {turn['user'][:40]}...", expanded=False):
+                st.markdown(f"**Q:** {turn['user']}")
+                st.markdown(f"**A:** {turn['assistant']}")
+                if "time" in turn:
+                    st.caption(f"⏱️ {turn['time']:.2f}s")
+        if st.sidebar.button("🧹 Clear History", use_container_width=True):
+            st.session_state.history = []
             st.rerun()
 
-    # Chat Input
-    user_query = st.chat_input("Ask me your question:")
+    # CENTER — Chat
+    st.markdown("### 💡 Ask me about workouts, diet, or motivation")
+
+    kb_text = read_knowledge_base("data.txt")
+    vectorstore = build_vectorstore(kb_text)
+    llm, chain = create_llm_chain(GOOGLE_KEY)
+
+    # Show Tip of the Day once (after profile submit)
+    if st.session_state.tip_of_the_day:
+        st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
+        st.session_state.tip_of_the_day = None
+
+    # Randomize FAQ Buttons each time and give unique keys
+    faq_items = random.sample(list(FAQ_QUERIES.items()), 4)
+    cols = st.columns(len(faq_items))
+    for i, (label, query) in enumerate(faq_items):
+        if cols[i].button(label, key=f"faq_{i}_{label}"):
+            st.session_state["last_quick"] = query
+            st.rerun()
+
+    user_query = st.chat_input("Ask FitBot your question:")
     if user_query or "last_quick" in st.session_state:
         query = user_query or st.session_state.pop("last_quick")
 
-        # Motivational fade-in loading tips
-        placeholder = st.empty()
-        for _ in range(4):
-            tip = random.choice(DAILY_TIPS)
-            placeholder.markdown(
-                f"""
-                <div style="
-                    text-align:center;
-                    font-size:1.2rem;
-                    font-weight:500;
-                    color: var(--text-color, #ddd);
-                    opacity: 0;
-                    transition: opacity 1s ease-in-out;
-                " id="tipBox">
-                    💭 {tip}
-                </div>
-                <script>
-                    const box = document.getElementById('tipBox');
-                    setTimeout(() => box.style.opacity = 1, 200);
-                </script>
-                """,
-                unsafe_allow_html=True,
-            )
-            time.sleep(1.5)
-        placeholder.empty()
+        # ✅ Motivational Loading Tip (uses CSS var for auto dark/light color)
+        tip_html = f"""
+        <div id="tip_box" style="text-align:center; padding:10px; transition:opacity 1s;">
+            <div style="font-size:18px; color: var(--text-color, #000);">💭 {random.choice(DAILY_TIPS)}</div>
+        </div>
+        <script>
+        // rotate tips every 3s with fade-in/out
+        const tips = {DAILY_TIPS};
+        const tipBox = document.getElementById('tip_box');
+        let idx = 0;
+        function changeTip(){{
+            tipBox.style.opacity = 0;
+            setTimeout(() => {{
+                tipBox.innerHTML = '<div style="font-size:18px; color: var(--text-color, #000);">💭 ' + tips[idx] + '</div>';
+                tipBox.style.opacity = 1;
+                idx = (idx + 1) % tips.length;
+            }}, 500);
+        }}
+        setInterval(changeTip, 3000);
+        </script>
+        """
+        html(tip_html, height=90)
 
-        # Answer generation
-        answer = answer_query(chain, vectorstore, query, st.session_state.profile, st.session_state.history)
-        st.session_state.history.append({"user": query, "assistant": answer})
+        with st.spinner("Generating your personalized answer..."):
+            start = time.time()
+            answer = generate_answer(chain, vectorstore, query, st.session_state.profile, st.session_state.history)
+            latency = time.time() - start
+
+        # clear the tip area (the html component will remain but we proceed to show answer)
+        # append to history
+        st.session_state.history.append({"user": query, "assistant": answer, "time": latency})
         st.success(answer)
 
-# ----------------------------- CONTROL FLOW -----------------------------
-st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
-
-if st.session_state.profile_submitted:
-    page_chat()
-else:
+# -----------------------------
+# CONTROL FLOW
+# -----------------------------
+if not st.session_state.profile_submitted:
     page_profile()
+else:
+    page_chat()
 
 st.markdown("---")
-st.caption("FitBot — Personalized Fitness Coach | Capstone Project")
+st.caption("FitBot — Smart AI Fitness Coach | Personalized | Motivational | Safe Advice")
