@@ -174,7 +174,8 @@ def page_profile():
         st.session_state.faq_display = random.sample(list(FAQ_QUERIES.items()), min(6, len(FAQ_QUERIES)))
         st.success("Profile saved — loading FitBot...")
         time.sleep(0.8)
-        st.experimental_rerun()
+        st.rerun()
+
 
 # -----------------------------
 # UI: MAIN CHAT PAGE
@@ -191,7 +192,8 @@ def page_chat():
         st.markdown("---")
         if st.button("✏️ Edit Profile", use_container_width=True):
             st.session_state.profile_submitted = False
-            st.experimental_rerun()
+            st.rerun()
+
 
     # Right sidebar: History (sectioned)
     st.sidebar.header("📜 Chat History")
@@ -207,7 +209,8 @@ def page_chat():
                     st.caption(f"⏱️ {turn['time']:.2f}s")
         if st.sidebar.button("🧹 Clear History", use_container_width=True):
             st.session_state.history = []
-            st.experimental_rerun()
+            st.rerun()
+
 
     # center area: main chat + FAQs
     st.markdown("### 💡 Ask me about workouts, diet, recovery or motivation")
