@@ -1,4 +1,4 @@
-# app.py — FitBot (fixed tip animation + rotating FAQ suggestions)
+# app.py — FitBot (final fixed version with working tip animation + full profile fields)
 import os
 import time
 import random
@@ -35,15 +35,13 @@ DAILY_TIPS = [
     "🍎 Fuel your body with whole, nutrient-dense foods.",
 ]
 
-# goal-based questions
 GOAL_BASED_FAQS = {
     "Weight loss": [
         ("🔥 Fat-Burning Cardio", "Suggest a 30-minute fat-burning cardio routine."),
         ("🍽️ Calorie Deficit", "How do I maintain a healthy calorie deficit?"),
         ("🥗 Low-Cal Diet", "Give me a sample low-calorie meal plan."),
         ("💧 Water Intake", "How much water should I drink daily for fat loss?"),
-        ("🧘 Rest Days", "How many rest days should I take during weight loss?"),
-        ("⚡ HIIT", "Give me a quick 15-minute HIIT plan for fat burn.")
+        ("⚡ HIIT", "Give me a quick 15-minute HIIT plan for fat burn."),
     ],
     "Muscle gain": [
         ("🏋️ Strength Split", "Give me a 4-day muscle-building workout plan."),
@@ -51,24 +49,19 @@ GOAL_BASED_FAQS = {
         ("🥤 Supplements", "Should I take protein shakes or creatine for muscle gain?"),
         ("🛌 Recovery", "How many rest days do I need for muscle recovery?"),
         ("🥩 Calorie Surplus", "How can I safely increase calorie intake for growth?"),
-        ("🧠 Focus", "How can I stay consistent with muscle gain training?")
     ],
     "Endurance": [
         ("🏃 Endurance Plan", "Give me a weekly running and HIIT plan."),
         ("🥦 Energy Diet", "What foods improve stamina and endurance?"),
         ("💨 Breathing", "How can I improve breathing during cardio workouts?"),
         ("🚴 Cycling Routine", "What are good cycling routines for stamina?"),
-        ("🏊 Swimming", "Is swimming effective for endurance?"),
-        ("🕐 Schedule", "What’s an ideal 5-day endurance training routine?")
     ],
     "General fitness": [
         ("💪 Balanced Routine", "Suggest a balanced weekly workout plan."),
         ("🥗 Healthy Eating", "What should a general fitness diet include?"),
         ("🧘 Mind & Body", "How can I include yoga for better overall health?"),
         ("⚖️ Lifestyle", "Give me daily tips to stay fit and active."),
-        ("🚶 Walking", "Is walking every day enough for fitness?"),
-        ("🥑 Nutrition Basics", "What are essential nutrients for general health?")
-    ]
+    ],
 }
 
 # -----------------------------
@@ -93,7 +86,7 @@ if "faq_display" not in st.session_state:
     st.session_state.faq_display = []
 
 # -----------------------------
-# HELPER FUNCTIONS
+# HELPERS
 # -----------------------------
 def build_vectorstore(text):
     splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
@@ -114,7 +107,13 @@ Context: {context}
 Question: {question}
 Answer:
 """
-    return LLMChain(llm=llm, prompt=PromptTemplate(template=template, input_variables=["profile","chat_history","context","question"]))
+    return LLMChain(
+        llm=llm,
+        prompt=PromptTemplate(
+            template=template,
+            input_variables=["profile", "chat_history", "context", "question"],
+        ),
+    )
 
 def retrieve_context(vectorstore, query):
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
@@ -123,7 +122,7 @@ def retrieve_context(vectorstore, query):
 
 def generate_answer(chain, vectorstore, query, profile, history):
     context = retrieve_context(vectorstore, query)
-    profile_str = ", ".join(f"{k}: {v}" for k,v in profile.items() if v)
+    profile_str = ", ".join(f"{k}: {v}" for k, v in profile.items() if v)
     chat_str = "\n".join([f"User: {h['user']}\nAssistant: {h['assistant']}" for h in history[-6:]])
     return chain.predict(profile=profile_str, chat_history=chat_str, context=context, question=query)
 
@@ -132,16 +131,31 @@ def generate_answer(chain, vectorstore, query, profile, history):
 # -----------------------------
 def page_profile():
     st.title("🏋️ Welcome to FitBot!")
+    st.markdown("Let's personalize your experience 👇")
+
     with st.form("profile_form"):
         name = st.text_input("Your Name", value=st.session_state.profile["name"])
         goal = st.selectbox("Primary Goal", ["Weight loss", "Muscle gain", "Endurance", "General fitness"])
         age = st.number_input("Age", min_value=10, max_value=80, value=st.session_state.profile["age"])
         weight = st.number_input("Weight (kg)", min_value=30, max_value=200, value=st.session_state.profile["weight"])
         gender = st.selectbox("Gender", ["Male", "Female", "Other", "Prefer not to say"])
+        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
+        diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
+        workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"])
+
         submitted = st.form_submit_button("Start FitBot")
 
     if submitted:
-        st.session_state.profile.update({"name": name, "goal": goal, "age": age, "weight": weight, "gender": gender})
+        st.session_state.profile.update({
+            "name": name,
+            "goal": goal,
+            "age": age,
+            "weight": weight,
+            "gender": gender,
+            "level": level,
+            "diet": diet,
+            "workout_time": workout_time,
+        })
         st.session_state.profile_submitted = True
         st.session_state.faq_display = random.sample(GOAL_BASED_FAQS[goal], 4)
         st.success("✅ Profile saved! Starting FitBot...")
@@ -155,6 +169,7 @@ def page_chat():
     st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
     st.title("💬 FitBot — Your AI Fitness Assistant")
 
+    # LEFT SIDEBAR — PROFILE
     with st.sidebar:
         st.header("👤 Profile")
         for k, v in st.session_state.profile.items():
@@ -164,7 +179,7 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.rerun()
 
-    # right sidebar: chat history
+    # RIGHT SIDEBAR — HISTORY
     st.sidebar.header("📜 Chat History")
     for turn in reversed(st.session_state.history):
         with st.sidebar.expander(f"Q: {turn['user'][:35]}..."):
@@ -176,31 +191,39 @@ def page_chat():
 
     st.markdown("### ⚡ Ask about workouts, diet, or recovery")
 
-    # prepare AI
     kb_text = "Fitness knowledge base loaded."
     vectorstore = build_vectorstore(kb_text)
     chain = create_llm_chain()
 
     def handle_query(q_text):
         placeholder = st.empty()
-        # 🌈 animated motivational tips
+
+        # 🌈 Animated motivational tip (true fade-in/out)
         tip_html = f"""
-        <div style='text-align:center; color:#00a896; font-size:18px; font-weight:600; transition:opacity 1s ease-in-out;' id='tip_box'>
-            💭 {random.choice(DAILY_TIPS)}
-        </div>
+        <style>
+        #tip_box {{
+            text-align:center;
+            color:#009688;
+            font-size:18px;
+            font-weight:600;
+            opacity:1;
+            transition:opacity 1s ease-in-out;
+        }}
+        </style>
+        <div id="tip_box">💭 {random.choice(DAILY_TIPS)}</div>
         <script>
         const tips = {DAILY_TIPS};
         let idx = 0;
-        const box = document.getElementById('tip_box');
-        function changeTip() {{
+        const box = document.getElementById("tip_box");
+        function fadeTip() {{
             box.style.opacity = 0;
-            setTimeout(()=>{{
+            setTimeout(() => {{
                 box.innerText = "💭 " + tips[idx];
                 box.style.opacity = 1;
-                idx = (idx+1) % tips.length;
-            }}, 500);
+                idx = (idx + 1) % tips.length;
+            }}, 600);
         }}
-        setInterval(changeTip, 3000);
+        setInterval(fadeTip, 3000);
         </script>
         """
         placeholder.markdown(tip_html, unsafe_allow_html=True)
@@ -212,12 +235,13 @@ def page_chat():
 
         placeholder.empty()
         st.session_state.history.append({"user": q_text, "assistant": ans, "time": latency})
-        # 🎯 refresh new goal-based questions dynamically
+
+        # update goal-based questions dynamically
         goal = st.session_state.profile["goal"]
         st.session_state.faq_display = random.sample(GOAL_BASED_FAQS[goal], 4)
         st.success(ans)
 
-    # show FAQ buttons (auto-refresh on every click)
+    # SHOW FAQ BUTTONS (dynamic refresh)
     st.markdown("#### 💡 Recommended Quick Questions")
     cols = st.columns(4)
     for i, (label, q) in enumerate(st.session_state.faq_display):
