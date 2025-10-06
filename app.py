@@ -1,4 +1,4 @@
-# app.py — FitBot (FAQ + loading-tip fixes)
+# app.py — FitBot (Goal-based FAQ + Dynamic Tips)
 import os
 import time
 import random
@@ -20,7 +20,7 @@ GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
 # -----------------------------
-# DYNAMIC DATA
+# DATA: KNOWLEDGE + TIPS + FAQ
 # -----------------------------
 FALLBACK_KB = """
 BEGIN FITNESS KB
@@ -32,29 +32,44 @@ END FITNESS KB
 """
 
 DAILY_TIPS = [
-    "Stay hydrated — water boosts your metabolism!",
-    "Focus on consistency, not perfection.",
-    "Don’t skip warm-ups — prevent injuries.",
-    "Sleep 7–9 hours daily for muscle recovery.",
-    "Discipline beats motivation every time!",
-    "Small progress every day leads to big results.",
-    "Eat clean 80% of the time, enjoy 20% guilt-free.",
-    "Remember, fitness is a lifestyle, not a phase.",
-    "Stretching improves recovery and flexibility.",
-    "Fuel your body with whole, nutrient-dense foods.",
+    "💧 Stay hydrated — water boosts your metabolism!",
+    "🔥 Focus on consistency, not perfection.",
+    "🧘 Don’t skip warm-ups — prevent injuries.",
+    "😴 Sleep 7–9 hours daily for muscle recovery.",
+    "💪 Discipline beats motivation every time!",
+    "🏋️ Small progress every day leads to big results.",
+    "🥗 Eat clean 80% of the time, enjoy 20% guilt-free.",
+    "🚀 Fitness is a lifestyle, not a phase.",
+    "🤸 Stretching improves recovery and flexibility.",
+    "🍎 Fuel your body with whole, nutrient-dense foods.",
 ]
 
-FAQ_QUERIES = {
-    "🏋️ 3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
-    "🥗 Post-Workout Meal": "What should I eat after my workout for recovery?",
-    "💪 Protein Alternatives": "I don’t eat eggs. Suggest vegetarian protein sources.",
-    "🔥 Weight Loss Tips": "How can I burn fat effectively and safely?",
-    "🧘 Recovery": "What are some post-workout recovery techniques?",
-    "⚡ Motivation": "How to stay motivated for daily workouts?",
-    "💤 Sleep & Fitness": "Why is sleep important for fitness?",
-    "🏃 Cardio vs Strength": "Which is better for weight loss — cardio or strength training?",
-    "🍽️ Calorie Intake": "How do I calculate daily calorie needs?",
-    "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout.",
+# Goal-based FAQ recommendations
+GOAL_BASED_FAQS = {
+    "Weight loss": [
+        ("🔥 Fat-Burning Cardio", "Suggest a 30-minute fat-burning cardio routine."),
+        ("🍽️ Calorie Deficit", "How do I maintain a healthy calorie deficit?"),
+        ("🥗 Low-Cal Diet", "Give me a sample low-calorie meal plan."),
+        ("💧 Water Intake", "How much water should I drink daily for fat loss?")
+    ],
+    "Muscle gain": [
+        ("🏋️ Strength Split", "Give me a 4-day muscle-building workout plan."),
+        ("🍗 Protein Diet", "What should I eat to gain lean muscle?"),
+        ("🥤 Supplements", "Should I take protein shakes or creatine for muscle gain?"),
+        ("🛌 Recovery", "How many rest days do I need for muscle recovery?")
+    ],
+    "Endurance": [
+        ("🏃 Endurance Plan", "Give me a weekly running and HIIT plan."),
+        ("🥦 Energy Diet", "What foods improve stamina and endurance?"),
+        ("💨 Breathing", "How can I improve breathing during cardio workouts?"),
+        ("🚴 Interval Training", "What are good cycling routines for stamina?")
+    ],
+    "General fitness": [
+        ("💪 Balanced Routine", "Suggest a balanced weekly workout plan."),
+        ("🥗 Healthy Eating", "What should a general fitness diet include?"),
+        ("🧘 Mind & Body", "How can I include yoga for better overall health?"),
+        ("⚖️ Lifestyle", "Give me daily tips to stay fit and active.")
+    ]
 }
 
 # -----------------------------
@@ -75,9 +90,6 @@ if "profile" not in st.session_state:
     }
 if "profile_submitted" not in st.session_state:
     st.session_state.profile_submitted = False
-if "tip_of_the_day" not in st.session_state:
-    st.session_state.tip_of_the_day = None
-# session id to help produce unique keys
 if "session_id" not in st.session_state:
     st.session_state.session_id = random.randint(1, 10**9)
 
@@ -130,12 +142,11 @@ def generate_answer(chain: LLMChain, vectorstore, query: str, profile: Dict[str,
     try:
         return chain.predict(profile=profile_str, chat_history=chat_str, context=context, question=query)
     except Exception as e:
-        # return friendly fallback
         st.error(f"LLM error: {e}")
         return "Sorry — I couldn't generate an answer right now. Please try again."
 
 # -----------------------------
-# UI: PROFILE PAGE
+# PAGE: PROFILE SETUP
 # -----------------------------
 def page_profile():
     st.title("🏋️ Welcome to FitBot!")
@@ -159,32 +170,24 @@ def page_profile():
 
     if submitted:
         st.session_state.profile.update({
-            "name": name,
-            "age": age,
-            "weight": weight,
-            "gender": gender,
-            "goal": goal,
-            "level": level,
-            "diet": diet,
-            "workout_time": workout_time,
+            "name": name, "age": age, "weight": weight,
+            "gender": gender, "goal": goal, "level": level,
+            "diet": diet, "workout_time": workout_time,
         })
         st.session_state.profile_submitted = True
-        st.session_state.tip_of_the_day = random.choice(DAILY_TIPS)
-        # refresh faq_display for this session (so FAQ changes on login)
-        st.session_state.faq_display = random.sample(list(FAQ_QUERIES.items()), min(6, len(FAQ_QUERIES)))
-        st.success("Profile saved — loading FitBot...")
+        st.session_state.faq_display = random.sample(GOAL_BASED_FAQS[goal], len(GOAL_BASED_FAQS[goal]))
+        st.success("Profile saved — launching FitBot...")
         time.sleep(0.8)
         st.rerun()
 
-
 # -----------------------------
-# UI: MAIN CHAT PAGE
+# PAGE: MAIN CHAT
 # -----------------------------
 def page_chat():
     st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
     st.title("💬 FitBot — Your AI Fitness Assistant")
 
-    # Left sidebar: Profile (keeps profile editable)
+    # Sidebar: Profile
     with st.sidebar:
         st.header("👤 Profile")
         for k, v in st.session_state.profile.items():
@@ -194,101 +197,69 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.rerun()
 
-
-    # Right sidebar: History (sectioned)
+    # Sidebar: History
     st.sidebar.header("📜 Chat History")
     if not st.session_state.history:
-        st.sidebar.info("No chats yet. Start asking below 👇")
+        st.sidebar.info("No chats yet. Start below 👇")
     else:
         for i, turn in enumerate(reversed(st.session_state.history)):
-            # show as expander so user can click and view each Q/A
-            with st.sidebar.expander(f"Q: {turn['user'][:40]}...", expanded=False):
+            with st.sidebar.expander(f"Q: {turn['user'][:40]}..."):
                 st.markdown(f"**Q:** {turn['user']}")
                 st.markdown(f"**A:** {turn['assistant']}")
-                if "time" in turn:
-                    st.caption(f"⏱️ {turn['time']:.2f}s")
         if st.sidebar.button("🧹 Clear History", use_container_width=True):
             st.session_state.history = []
             st.rerun()
 
+    st.markdown("### ⚡ Ask about workouts, diet, or recovery")
 
-    # center area: main chat + FAQs
-    st.markdown("### 💡 Ask me about workouts, diet, recovery or motivation")
-
-    # build vectorstore & chain (cached)
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore(kb_text)
     llm, chain = create_llm_chain(GOOGLE_KEY)
     if chain is None:
-        st.error("LLM not initialized — make sure GOOGLE_API_KEY is set in .env")
+        st.error("LLM not initialized — check GOOGLE_API_KEY")
         return
 
-    # Tip of the Day (show once after profile submit)
-    if st.session_state.tip_of_the_day:
-        st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
-        st.session_state.tip_of_the_day = None
-
-    # Prepare FAQ display: pick 4 from session's faq_display (which was set on login)
-    if "faq_display" not in st.session_state:
-        st.session_state.faq_display = random.sample(list(FAQ_QUERIES.items()), min(6, len(FAQ_QUERIES)))
-    display_faqs = st.session_state.faq_display[:4]
-
-    st.markdown("#### ⚡ Quick Fitness Queries")
-    # render FAQ buttons in responsive columns
-    cols = st.columns(len(display_faqs))
     def handle_query(q_text: str):
-        """Centralized query handler: shows loading tips, runs chain, appends history and displays answer."""
-        # show rotating motivational tips in a placeholder (removed after answer)
         placeholder = st.empty()
-        tip_html = """
-        <style>
-        #tip_box {
-            text-align:center;
-            padding:10px;
-            border-radius:8px;
-            transition: opacity 0.6s ease-in-out;
-            font-weight:600;
-            font-size:16px;
-        }
-        @media (prefers-color-scheme: dark) {
-            #tip_box { background: rgba(255,255,255,0.03); color: #00BFA6; }
-        }
-        @media (prefers-color-scheme: light) {
-            #tip_box { background: rgba(0,0,0,0.03); color: #006d5b; }
-        }
-        </style>
-        <div id="tip_box">💭 Loading…</div>
+        tip_html = f"""
+        <div style='text-align:center; color:#009688; font-size:18px; font-weight:600; transition:opacity 1s ease-in-out;' id='tip_box'>
+            💭 {random.choice(DAILY_TIPS)}
+        </div>
         <script>
-        const tips = %s;
+        const tips = {DAILY_TIPS};
         let idx = 0;
         const box = document.getElementById('tip_box');
-        function changeTip(){ box.style.opacity = 0; setTimeout(()=>{ box.innerText = '💭 '+tips[idx]; box.style.opacity = 1; idx = (idx+1)%%tips.length; }, 300); }
-        changeTip();
-        let timer = setInterval(changeTip, 3000);
-        // stop rotating after 12s
-        setTimeout(()=>{ clearInterval(timer); }, 12000);
+        function changeTip() {{
+            box.style.opacity = 0;
+            setTimeout(()=>{{
+                box.innerText = "💭 " + tips[idx];
+                box.style.opacity = 1;
+                idx = (idx+1) % tips.length;
+            }}, 500);
+        }}
+        setInterval(changeTip, 3000);
         </script>
-        """ % DAILY_TIPS
+        """
         placeholder.markdown(tip_html, unsafe_allow_html=True)
 
-        # run the model with spinner
         with st.spinner("Generating your personalized response..."):
             start = time.time()
             ans = generate_answer(chain, vectorstore, q_text, st.session_state.profile, st.session_state.history)
             latency = time.time() - start
 
-        # clear tip placeholder and show answer
         placeholder.empty()
         st.session_state.history.append({"user": q_text, "assistant": ans, "time": latency})
         st.success(ans)
+        st.session_state.faq_display = random.sample(GOAL_BASED_FAQS[st.session_state.profile["goal"]], len(GOAL_BASED_FAQS[st.session_state.profile["goal"]]))
 
-    # render FAQ buttons — handle immediately on click (no rerun)
-    for i, (label, q) in enumerate(display_faqs):
-        # unique key per session + index avoids collisions
+    # Dynamic FAQ (changes after each interaction)
+    st.markdown("#### 💡 Recommended Quick Questions")
+    faq_items = st.session_state.faq_display[:4]
+    cols = st.columns(len(faq_items))
+    for i, (label, q) in enumerate(faq_items):
         if cols[i].button(label, key=f"faq_{st.session_state.session_id}_{i}"):
             handle_query(q)
 
-    # Chat input (user typed queries)
     user_query = st.chat_input("Ask FitBot your question:")
     if user_query:
         handle_query(user_query)
@@ -302,4 +273,4 @@ else:
     page_profile()
 
 st.markdown("---")
-st.caption("FitBot — Personalized Fitness Coach | Capstone Project")
+st.caption("FitBot — Personalized AI Fitness Coach | Capstone Project")
