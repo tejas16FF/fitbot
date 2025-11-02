@@ -1,8 +1,8 @@
 streamlit
 python-dotenv
-langchain
-langchain-community
-langchain-google-genai
+langchain==0.1.12
+langchain-community==0.0.29
+langchain-google-genai>=1.0.0
 google-generativeai
 faiss-cpu
 sentence-transformers
