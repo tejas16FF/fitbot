@@ -26,6 +26,30 @@ try:
     asyncio.get_running_loop()
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
+# --- Streamlit Session State Initialization ---
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "profile" not in st.session_state:
+    st.session_state.profile = {
+        "name": "",
+        "age": 25,
+        "weight": 70,
+        "goal": "General fitness",
+        "level": "Beginner",
+        "gender": "Prefer not to say",
+        "diet": "No preference",
+        "workout_time": "Morning",
+    }
+
+if "profile_submitted" not in st.session_state:
+    st.session_state.profile_submitted = False
+
+if "tip_of_the_day" not in st.session_state:
+    st.session_state.tip_of_the_day = None
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = random.randint(1, 10**9)
 
 
 # -----------------------------
