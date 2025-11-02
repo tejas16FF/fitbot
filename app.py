@@ -19,6 +19,15 @@ load_dotenv(".env")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
+import asyncio
+
+# --- AsyncIO event loop patch for Streamlit + gRPC ---
+try:
+    asyncio.get_running_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 # -----------------------------
 # KNOWLEDGE BASE + DATA
 # -----------------------------
