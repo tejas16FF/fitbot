@@ -83,7 +83,6 @@ DAILY_TIPS = [
     "🕺 Move more, sit less — your body was made to move.",
     "🌞 A short morning stretch can change your entire day."
 ]
-}
 
 # -----------------------------
 # SESSION STATE
