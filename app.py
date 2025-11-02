@@ -1,4 +1,4 @@
-# app.py — FitBot (final fixed version with working tip animation + full profile fields)
+# app.py — FitBot (Extended Quick Questions + Dynamic Refresh + Animated Tips)
 import os
 import time
 import random
@@ -20,48 +20,69 @@ GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
 # -----------------------------
-# STATIC DATA
+# DATA
 # -----------------------------
 DAILY_TIPS = [
-    "💧 Stay hydrated — water boosts your metabolism!",
-    "🔥 Focus on consistency, not perfection.",
-    "🧘 Don’t skip warm-ups — prevent injuries.",
-    "😴 Sleep 7–9 hours daily for muscle recovery.",
-    "💪 Discipline beats motivation every time!",
-    "🏋️ Small progress every day leads to big results.",
-    "🥗 Eat clean 80% of the time, enjoy 20% guilt-free.",
-    "🚀 Fitness is a lifestyle, not a phase.",
-    "🤸 Stretching improves recovery and flexibility.",
-    "🍎 Fuel your body with whole, nutrient-dense foods.",
-]
+    # 🔥 Motivation & Consistency
+    "💪 Progress takes time — be patient and consistent.",
+    "🔥 You don’t have to be extreme, just consistent.",
+    "🚀 Small daily habits lead to big lifelong changes.",
+    "🎯 Show up for yourself — even 10 minutes counts.",
+    "🧠 Focus on progress, not perfection.",
+    "🏁 The hardest part is starting — the rest will follow.",
+    "🌟 Every rep is a step toward a stronger you.",
+    "💥 Motivation fades, discipline stays.",
+    "⚡ You won’t always be motivated — but you can always be committed.",
+    "🎧 A good playlist can turn any workout into therapy.",
 
-GOAL_BASED_FAQS = {
-    "Weight loss": [
-        ("🔥 Fat-Burning Cardio", "Suggest a 30-minute fat-burning cardio routine."),
-        ("🍽️ Calorie Deficit", "How do I maintain a healthy calorie deficit?"),
-        ("🥗 Low-Cal Diet", "Give me a sample low-calorie meal plan."),
-        ("💧 Water Intake", "How much water should I drink daily for fat loss?"),
-        ("⚡ HIIT", "Give me a quick 15-minute HIIT plan for fat burn."),
-    ],
-    "Muscle gain": [
-        ("🏋️ Strength Split", "Give me a 4-day muscle-building workout plan."),
-        ("🍗 Protein Diet", "What should I eat to gain lean muscle?"),
-        ("🥤 Supplements", "Should I take protein shakes or creatine for muscle gain?"),
-        ("🛌 Recovery", "How many rest days do I need for muscle recovery?"),
-        ("🥩 Calorie Surplus", "How can I safely increase calorie intake for growth?"),
-    ],
-    "Endurance": [
-        ("🏃 Endurance Plan", "Give me a weekly running and HIIT plan."),
-        ("🥦 Energy Diet", "What foods improve stamina and endurance?"),
-        ("💨 Breathing", "How can I improve breathing during cardio workouts?"),
-        ("🚴 Cycling Routine", "What are good cycling routines for stamina?"),
-    ],
-    "General fitness": [
-        ("💪 Balanced Routine", "Suggest a balanced weekly workout plan."),
-        ("🥗 Healthy Eating", "What should a general fitness diet include?"),
-        ("🧘 Mind & Body", "How can I include yoga for better overall health?"),
-        ("⚖️ Lifestyle", "Give me daily tips to stay fit and active."),
-    ],
+    # 🏋️‍♂️ Strength & Workout
+    "🏋️ Strength is built one rep at a time.",
+    "🤸 Warm up before lifting — it prevents injuries.",
+    "💪 Train smart — quality over quantity.",
+    "⚙️ Focus on form, not just the weight.",
+    "🔁 Consistency beats intensity over time.",
+    "📈 Track your progress — small wins add up.",
+    "🚶 A 20-minute walk is better than no movement at all.",
+    "🎯 Compound exercises give the best muscle growth.",
+    "🏆 Rest between sets — recovery makes you stronger.",
+    "🧘 Stretch after workouts for flexibility and longevity.",
+
+    # 🥗 Nutrition
+    "🥗 Fuel your goals — nutrition is 80% of fitness.",
+    "🍳 Start your day with protein to stay energized.",
+    "🥤 Smoothies are great, but whole foods are better.",
+    "🍠 Complex carbs give lasting energy — skip the sugar crash.",
+    "🥦 Eat the rainbow — more colors mean more nutrients.",
+    "🥑 Healthy fats = healthy hormones.",
+    "🍽️ Don’t skip meals — balance your macros instead.",
+    "🍓 Replace cravings with fruits, not processed snacks.",
+    "🌿 Protein helps recovery — don’t forget post-workout meals.",
+    "🍎 Real food > supplements — every single time.",
+
+    # 💧 Hydration & Recovery
+    "💧 Stay hydrated — muscles need water to perform.",
+    "🕐 Drink water before you feel thirsty.",
+    "🌊 Electrolytes matter after sweating a lot.",
+    "🛌 Sleep is your body’s natural recovery system.",
+    "😴 Aim for 7–9 hours of sleep every night.",
+    "🧘 Rest days are part of progress, not weakness.",
+    "🔥 Stretch and foam roll to prevent soreness.",
+    "📵 Reduce screen time before bed for better recovery.",
+    "🧊 A cold shower can help reduce post-workout inflammation.",
+    "🕯️ Deep breathing helps reduce stress and aid muscle repair.",
+
+    # 🧠 Mindset & Lifestyle
+    "🌅 Morning sunlight boosts your mood and focus.",
+    "📅 Plan your workouts like appointments — don’t skip them.",
+    "🎯 Your only competition is who you were yesterday.",
+    "🧍‍♂️ Good posture = more confidence and better breathing.",
+    "🧩 Fitness is not punishment — it’s self-respect.",
+    "❤️ Love your body enough to take care of it.",
+    "🎉 Rest days count — celebrate them too.",
+    "🚫 Don’t let one bad meal ruin your day — balance it out.",
+    "🕺 Move more, sit less — your body was made to move.",
+    "🌞 A short morning stretch can change your entire day."
+]
 }
 
 # -----------------------------
@@ -142,7 +163,6 @@ def page_profile():
         level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
         diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
         workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"])
-
         submitted = st.form_submit_button("Start FitBot")
 
     if submitted:
@@ -169,7 +189,7 @@ def page_chat():
     st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
     st.title("💬 FitBot — Your AI Fitness Assistant")
 
-    # LEFT SIDEBAR — PROFILE
+    # SIDEBARS
     with st.sidebar:
         st.header("👤 Profile")
         for k, v in st.session_state.profile.items():
@@ -179,7 +199,6 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.rerun()
 
-    # RIGHT SIDEBAR — HISTORY
     st.sidebar.header("📜 Chat History")
     for turn in reversed(st.session_state.history):
         with st.sidebar.expander(f"Q: {turn['user'][:35]}..."):
@@ -198,7 +217,7 @@ def page_chat():
     def handle_query(q_text):
         placeholder = st.empty()
 
-        # 🌈 Animated motivational tip (true fade-in/out)
+        # 🌈 Animated motivational tip
         tip_html = f"""
         <style>
         #tip_box {{
@@ -236,12 +255,12 @@ def page_chat():
         placeholder.empty()
         st.session_state.history.append({"user": q_text, "assistant": ans, "time": latency})
 
-        # update goal-based questions dynamically
+        # refresh FAQs dynamically
         goal = st.session_state.profile["goal"]
         st.session_state.faq_display = random.sample(GOAL_BASED_FAQS[goal], 4)
         st.success(ans)
 
-    # SHOW FAQ BUTTONS (dynamic refresh)
+    # SHOW FAQ BUTTONS
     st.markdown("#### 💡 Recommended Quick Questions")
     cols = st.columns(4)
     for i, (label, q) in enumerate(st.session_state.faq_display):
@@ -261,4 +280,4 @@ else:
     page_chat()
 
 st.markdown("---")
-st.caption("FitBot — Smart AI Fitness Coach | Capstone Project")
+st.caption("FitBot — Smart AI Fitness Coach")
