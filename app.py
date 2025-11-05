@@ -1,4 +1,4 @@
-# app.py — Final Stable FitBot (Gemini + FAISS + HuggingFace)
+# app.py — Final Stable FitBot (Gemini + FAISS + HuggingFace + Dynamic FAQ Fix)
 import os
 import time
 import random
@@ -16,7 +16,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # ===============================
 # 🔧 CONFIGURATION & PATCH
 # ===============================
-# AsyncIO loop fix for Streamlit + gRPC
+# AsyncIO fix for gRPC + Streamlit
 try:
     asyncio.get_running_loop()
 except RuntimeError:
@@ -222,7 +222,7 @@ def page_chat():
         st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
         st.session_state.tip_of_the_day = None
 
-    # Quick FAQs (randomized)
+    # Quick FAQs (randomized each rerun)
     st.markdown("#### ⚡ Quick Fitness Queries")
     display_faqs = random.sample(list(FAQ_QUERIES.items()), 4)
     cols = st.columns(4)
@@ -238,7 +238,7 @@ def page_chat():
             transition: opacity 0.6s ease-in-out;
             font-weight:600;
             font-size:16px;
-            color:#03B0A8;
+            color:#00A693;
         }}
         </style>
         <div id="tip_box">💭 {random.choice(DAILY_TIPS)}</div>
@@ -262,11 +262,19 @@ def page_chat():
         st.session_state.history.append({"user": query, "assistant": ans, "time": latency})
         st.success(ans)
 
+    # ✅ Fixed FAQ Buttons — now fully functional
     for i, (label, q) in enumerate(display_faqs):
         key = f"faq_{st.session_state.session_id}_{i}_{random.randint(1,10**6)}"
         if cols[i].button(label, key=key):
-            handle_query(q)
+            st.session_state["selected_query"] = q
+            st.rerun()
 
+    # ✅ Execute query AFTER rerun
+    if "selected_query" in st.session_state:
+        query = st.session_state.pop("selected_query")
+        handle_query(query)
+
+    # Chat input (manual)
     user_query = st.chat_input("Ask FitBot your question:")
     if user_query:
         handle_query(user_query)
