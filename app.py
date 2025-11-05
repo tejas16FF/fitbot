@@ -1,4 +1,4 @@
-# app.py — FitBot with Gamification, XP, Badges & Weekly Challenges 🎯
+# app.py — FitBot (Final Version: Left Profile + Right History + Gamification)
 import os
 import time
 import random
@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from typing import List, Dict, Any
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import CharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -27,12 +27,12 @@ load_dotenv(".env")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 
+st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
+
 # -----------------------------
 # KNOWLEDGE BASE
 # -----------------------------
-FALLBACK_KB = """
-Fitness knowledge base missing. Add 'data.txt' for custom data.
-"""
+FALLBACK_KB = "⚠️ Missing data.txt — please add your knowledge base file."
 
 # -----------------------------
 # DYNAMIC CONTENT
@@ -64,12 +64,7 @@ FAQ_QUERIES = {
 }
 
 # -----------------------------
-# STREAMLIT SETUP
-# -----------------------------
-st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
-
-# -----------------------------
-# SESSION STATE INIT
+# SESSION STATE
 # -----------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
@@ -146,7 +141,7 @@ def generate_answer(chain: LLMChain, vectorstore, query: str, profile: Dict[str,
 # -----------------------------
 def page_profile():
     st.title("🏋️ Welcome to FitBot!")
-    st.markdown("Let’s personalize your fitness journey 👇")
+    st.markdown("Let's personalize your fitness journey 👇")
 
     with st.form("profile_form"):
         name = st.text_input("Your Name", value=st.session_state.profile["name"])
@@ -157,7 +152,6 @@ def page_profile():
         level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
         diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
         workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"])
-
         submitted = st.form_submit_button("Save & Continue")
 
     if submitted:
@@ -185,9 +179,12 @@ def page_chat():
 
     st.title("💬 FitBot — Your AI Fitness Assistant")
 
-    # LEFT SIDEBAR
-    with st.sidebar:
-        st.header("👤 Profile")
+    # --- Layout Columns (Left = Profile, Center = Chat, Right = History)
+    col_left, col_center, col_right = st.columns([1.2, 2.2, 1.2])
+
+    # LEFT SIDEBAR — PROFILE + GAMIFICATION
+    with col_left:
+        st.header("👤 Your Profile")
         for k, v in st.session_state.profile.items():
             st.markdown(f"**{k.capitalize()}**: {v}")
 
@@ -195,42 +192,54 @@ def page_chat():
             st.session_state.profile_submitted = False
             st.rerun()
 
-        # 🎯 Gamification Progress
         render_progress_sidebar()
 
-    # CENTER CHAT
-    st.markdown("### 💡 Ask me about workouts, nutrition, recovery or motivation")
+    # CENTER — CHAT + FAQ
+    with col_center:
+        st.markdown("### 💡 Ask me about workouts, nutrition, recovery, or motivation")
+        st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
 
-    # Tip of the Day
-    st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
+        kb_text = read_knowledge_base("data.txt")
+        vectorstore = build_vectorstore(kb_text)
+        llm, chain = create_llm_chain(GOOGLE_KEY)
+        if not chain:
+            st.error("❌ Gemini API not initialized. Check your API key.")
+            return
 
-    kb_text = read_knowledge_base("data.txt")
-    vectorstore = build_vectorstore(kb_text)
-    llm, chain = create_llm_chain(GOOGLE_KEY)
+        # FAQ Buttons
+        st.markdown("#### ⚡ Quick Fitness Queries")
+        faq_items = random.sample(list(FAQ_QUERIES.items()), 4)
+        cols = st.columns(4)
+        for i, (label, question) in enumerate(faq_items):
+            key = f"faq_{i}_{random.randint(1000,9999)}"
+            if cols[i].button(label, key=key):
+                with st.spinner("🏋️ FitBot is thinking..."):
+                    answer = generate_answer(chain, vectorstore, question, st.session_state.profile, st.session_state.history)
+                    reward_for_chat()
+                    st.session_state.history.append({"user": question, "assistant": answer})
+                    st.success(answer)
+                    st.experimental_rerun()
 
-    if not chain:
-        st.error("❌ Gemini API not initialized. Check your API key.")
-        return
-
-    # FAQ Buttons
-    faq_items = random.sample(list(FAQ_QUERIES.items()), 4)
-    cols = st.columns(4)
-    for i, (label, question) in enumerate(faq_items):
-        if cols[i].button(label, key=f"faq_{i}_{random.randint(1,9999)}"):
-            with st.spinner("🤔 Thinking..."):
-                answer = generate_answer(chain, vectorstore, question, st.session_state.profile, st.session_state.history)
-                reward_for_chat()  # XP reward for using FAQ
-                st.session_state.history.append({"user": question, "assistant": answer, "time": time.time()})
+        # User Chat
+        user_query = st.chat_input("Ask FitBot your question:")
+        if user_query:
+            with st.spinner(random.choice(DAILY_TIPS)):
+                answer = generate_answer(chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
+                st.session_state.history.append({"user": user_query, "assistant": answer})
+                reward_for_chat()
                 st.success(answer)
+                st.experimental_rerun()
 
-    # User Query
-    user_query = st.chat_input("Ask your question here:")
-    if user_query:
-        with st.spinner(random.choice(DAILY_TIPS)):
-            answer = generate_answer(chain, vectorstore, user_query, st.session_state.profile, st.session_state.history)
-            st.session_state.history.append({"user": user_query, "assistant": answer, "time": time.time()})
-            reward_for_chat()
-            st.success(answer)
+    # RIGHT SIDEBAR — CHAT HISTORY
+    with col_right:
+        st.header("📜 Chat History")
+        if not st.session_state.history:
+            st.info("No chats yet. Start asking 👇")
+        else:
+            for i, turn in enumerate(reversed(st.session_state.history[-10:])):
+                with st.expander(f"Q{i+1}: {turn['user'][:40]}..."):
+                    st.markdown(f"**Q:** {turn['user']}")
+                    st.markdown(f"**A:** {turn['assistant']}")
 
 # -----------------------------
 # CONTROL FLOW
@@ -241,4 +250,4 @@ else:
     page_chat()
 
 st.markdown("---")
-st.caption("FitBot — Personalized AI Fitness Coach | With XP, Badges, Challenges & Motivation 💪")
+st.caption("FitBot — Personalized AI Fitness Coach | XP, Badges, Challenges & Motivation 💪")
