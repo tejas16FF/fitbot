@@ -1,169 +1,291 @@
-# gamification.py
+# gamification.py — persistent gamification system for FitBot
+import json
+import os
 import random
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import Dict, Any, Optional, List
 
-# ------------------------------------
-# 🏆 FitBot Gamification System
-# ------------------------------------
+PROGRESS_FILE = "user_progress.json"
+AUTO_SAVE = True
 
+# -----------------------------
+# Persistent storage helpers
+# -----------------------------
+def _read_json(path: str) -> Optional[Dict[str, Any]]:
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        st.warning(f"⚠️ Could not read progress file: {e}")
+    return None
+
+
+def _write_json(path: str, obj: Dict[str, Any]) -> bool:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, default=str)
+        return True
+    except Exception as e:
+        st.warning(f"⚠️ Could not save progress file: {e}")
+        return False
+
+
+def load_persistent_state() -> Dict[str, Any]:
+    """Load persisted state (profile, history, gamification)."""
+    state = _read_json(PROGRESS_FILE) or {}
+    gam = state.get("gamification", {})
+    profile = state.get("profile", {})
+    history = state.get("history", [])
+
+    # Convert last_login string to date
+    if gam.get("last_login"):
+        try:
+            gam["last_login"] = datetime.fromisoformat(gam["last_login"]).date()
+        except Exception:
+            gam["last_login"] = None
+
+    return {"gamification": gam, "profile": profile, "history": history}
+
+
+def save_persistent_state(gamification: Dict[str, Any], profile: Dict[str, Any], history: List[Dict[str, Any]]):
+    """Save all user data persistently."""
+    gam_copy = dict(gamification)
+    if isinstance(gam_copy.get("last_login"), datetime):
+        gam_copy["last_login"] = gam_copy["last_login"].isoformat()
+    elif hasattr(gam_copy.get("last_login"), "isoformat"):
+        gam_copy["last_login"] = gam_copy["last_login"].isoformat()
+
+    data = {
+        "gamification": gam_copy,
+        "profile": profile,
+        "history": history,
+    }
+    _write_json(PROGRESS_FILE, data)
+
+# -----------------------------
+# Initialization
+# -----------------------------
 def initialize_gamification():
-    """Initialize gamification state if missing."""
+    """Initialize gamification from saved file or defaults."""
+    persisted = load_persistent_state()
+    gam = persisted.get("gamification", {})
+    defaults = {
+        "xp": 0,
+        "level": 1,
+        "streak": 0,
+        "last_login": None,
+        "badges": [],
+        "weekly_challenge": None,
+        "challenge_progress": 0,
+        "challenge_completed": False,
+        "challenge_start_date": None,
+    }
+
     if "gamification" not in st.session_state:
-        st.session_state.gamification = {
-            "xp": 0,
-            "level": 1,
-            "streak": 0,
-            "last_login": None,
-            "badges": [],
-            "weekly_challenge": None,
-            "challenge_progress": 0,
-            "challenge_completed": False,
-            "challenge_start_date": None,
-        }
+        merged = defaults.copy()
+        merged.update(gam)
+        st.session_state.gamification = merged
 
-def update_daily_login():
-    """Handle daily login streak logic."""
-    gamedata = st.session_state.gamification
-    today = datetime.now().date()
-    last = gamedata["last_login"]
+    if "profile" not in st.session_state:
+        st.session_state.profile = persisted.get("profile", {})
+    if "history" not in st.session_state:
+        st.session_state.history = persisted.get("history", [])
 
-    if last is None or today > last:
-        # continue or reset streak
-        if last and today - last == timedelta(days=1):
-            gamedata["streak"] += 1
-        else:
-            gamedata["streak"] = 1
-        gamedata["last_login"] = today
-        add_xp(50, reason="🔥 Daily login streak active!")
+    # Ensure proper date format
+    if isinstance(st.session_state.gamification.get("last_login"), str):
+        try:
+            st.session_state.gamification["last_login"] = datetime.fromisoformat(
+                st.session_state.gamification["last_login"]
+            ).date()
+        except Exception:
+            st.session_state.gamification["last_login"] = None
 
-def add_xp(amount, reason=""):
-    """Add XP, check for level-up and badges."""
-    gamedata = st.session_state.gamification
-    gamedata["xp"] += amount
-    st.toast(f"💪 +{amount} XP! {reason}")
+    check_and_reset_weekly_challenge(save=False)
+    if AUTO_SAVE:
+        save_persistent_state(st.session_state.gamification, st.session_state.profile, st.session_state.history)
 
-    # Level-up logic
-    while gamedata["xp"] >= gamedata["level"] * 200:
-        gamedata["level"] += 1
+# -----------------------------
+# XP, Levels, and Badges
+# -----------------------------
+def add_xp(amount: int, show_msg: bool = True, reason: str = ""):
+    gam = st.session_state.gamification
+    gam["xp"] = int(gam.get("xp", 0)) + int(amount)
+
+    if show_msg:
+        st.success(f"💪 +{amount} XP! {reason}")
+
+    leveled = False
+    while gam["xp"] >= gam["level"] * 200:
+        gam["level"] += 1
+        leveled = True
+    if leveled:
         st.balloons()
-        st.success(f"🎉 Level Up! You’re now Level {gamedata['level']} 💪")
+        st.success(f"🎉 Level Up! You are now Level {gam['level']}")
 
     check_badges()
+    if AUTO_SAVE:
+        save_persistent_state(gam, st.session_state.profile, st.session_state.history)
+
 
 def reward_for_chat():
-    """Reward XP for each chat and update weekly challenge."""
-    add_xp(10, reason="💭 Great question!")
+    """Reward XP when user asks a question."""
+    add_xp(10, reason="Good question!")
     update_challenge_progress("chat")
 
-def check_badges():
-    """Grant badges at milestones."""
-    gamedata = st.session_state.gamification
-    xp = gamedata["xp"]
-    badges = gamedata["badges"]
 
-    badge_list = [
+def check_badges():
+    gam = st.session_state.gamification
+    xp = int(gam.get("xp", 0))
+    badges = gam.get("badges", [])
+    milestones = [
         (100, "💬 Active Learner"),
         (300, "🏋️ Fitness Champ"),
         (500, "🔥 Consistency King"),
         (1000, "🎯 Peak Performer"),
-        (1500, "💎 Limit Breaker"),
-        (2000, "👑 Ultimate Trainer"),
     ]
+    for threshold, name in milestones:
+        if xp >= threshold and name not in badges:
+            badges.append(name)
+            st.success(f"🏅 Badge unlocked: {name}")
+    gam["badges"] = badges
 
-    for threshold, badge in badge_list:
-        if xp >= threshold and badge not in badges:
-            badges.append(badge)
-            st.toast(f"🏅 New Badge Unlocked: {badge}")
-
-# ------------------------------------
-# 🗓️ Weekly Challenge System
-# ------------------------------------
-
+# -----------------------------
+# Challenges
+# -----------------------------
 def generate_weekly_challenge():
-    """Generate a random weekly challenge."""
     challenges = [
-        {"type": "chat", "target": 5, "reward": 100, "desc": "Ask 5 questions this week."},
-        {"type": "login", "target": 3, "reward": 150, "desc": "Log in on 3 different days this week."},
-        {"type": "streak", "target": 5, "reward": 200, "desc": "Maintain a 5-day streak."},
+        {"type": "chat", "target": 5, "reward": 100, "desc": "Ask 5 fitness questions this week."},
+        {"type": "login", "target": 3, "reward": 150, "desc": "Login 3 different days this week."},
+        {"type": "streak", "target": 5, "reward": 200, "desc": "Maintain a 5-day login streak."},
     ]
     return random.choice(challenges)
 
-def check_and_reset_weekly_challenge():
-    """Check if a week has passed since challenge started."""
-    gamedata = st.session_state.gamification
+
+def check_and_reset_weekly_challenge(save=True):
+    gam = st.session_state.gamification
     today = datetime.now().date()
+    start_date = gam.get("challenge_start_date")
 
-    if gamedata["weekly_challenge"] is None or gamedata["challenge_start_date"] is None:
-        gamedata["weekly_challenge"] = generate_weekly_challenge()
-        gamedata["challenge_start_date"] = today
-        gamedata["challenge_progress"] = 0
-        gamedata["challenge_completed"] = False
+    if start_date:
+        if isinstance(start_date, str):
+            try:
+                start_date = datetime.fromisoformat(start_date).date()
+            except Exception:
+                start_date = None
+
+    # Set new challenge if none or expired
+    if gam.get("weekly_challenge") is None or start_date is None:
+        gam["weekly_challenge"] = generate_weekly_challenge()
+        gam["challenge_start_date"] = today
+        gam["challenge_progress"] = 0
+        gam["challenge_completed"] = False
     else:
-        days_since_start = (today - gamedata["challenge_start_date"]).days
-        if days_since_start >= 7:
-            gamedata["weekly_challenge"] = generate_weekly_challenge()
-            gamedata["challenge_start_date"] = today
-            gamedata["challenge_progress"] = 0
-            gamedata["challenge_completed"] = False
+        days = (today - start_date).days if start_date else 8
+        if days >= 7:
+            gam["weekly_challenge"] = generate_weekly_challenge()
+            gam["challenge_start_date"] = today
+            gam["challenge_progress"] = 0
+            gam["challenge_completed"] = False
 
-def update_challenge_progress(action_type):
-    """Update progress toward current weekly challenge."""
-    gamedata = st.session_state.gamification
-    challenge = gamedata["weekly_challenge"]
+    if save and AUTO_SAVE:
+        save_persistent_state(gam, st.session_state.profile, st.session_state.history)
 
-    if not challenge or gamedata["challenge_completed"]:
+
+def update_challenge_progress(action_type: str):
+    gam = st.session_state.gamification
+    challenge = gam.get("weekly_challenge")
+    if not challenge or gam.get("challenge_completed"):
         return
+    if challenge.get("type") == action_type:
+        gam["challenge_progress"] = int(gam.get("challenge_progress", 0)) + 1
+        st.info(f"🎯 Challenge progress: {gam['challenge_progress']}/{challenge.get('target')}")
+        if gam["challenge_progress"] >= challenge.get("target", 0):
+            gam["challenge_completed"] = True
+            add_xp(challenge.get("reward", 0), reason=f"🏆 Completed weekly challenge: {challenge.get('desc')}")
 
-    if challenge["type"] == action_type:
-        gamedata["challenge_progress"] += 1
-        target = challenge["target"]
-        st.toast(f"🎯 Challenge progress: {gamedata['challenge_progress']}/{target}")
+    if AUTO_SAVE:
+        save_persistent_state(gam, st.session_state.profile, st.session_state.history)
 
-        if gamedata["challenge_progress"] >= target:
-            gamedata["challenge_completed"] = True
-            add_xp(challenge["reward"], reason=f"🏆 Weekly Challenge Complete: {challenge['desc']}")
+# -----------------------------
+# Daily login / streak
+# -----------------------------
+def update_daily_login():
+    gam = st.session_state.gamification
+    today = datetime.now().date()
+    last = gam.get("last_login")
 
-# ------------------------------------
-# 🎨 UI Rendering
-# ------------------------------------
+    if isinstance(last, str):
+        try:
+            last = datetime.fromisoformat(last).date()
+        except Exception:
+            last = None
 
+    if last is None or today > last:
+        if last and (today - last).days == 1:
+            gam["streak"] = int(gam.get("streak", 0)) + 1
+        else:
+            gam["streak"] = 1
+        gam["last_login"] = today
+        add_xp(50, reason="Daily login bonus")
+        update_challenge_progress("login")
+        if AUTO_SAVE:
+            save_persistent_state(gam, st.session_state.profile, st.session_state.history)
+
+# -----------------------------
+# UI helpers
+# -----------------------------
 def render_progress_sidebar():
-    """Display progress, streaks, badges, and challenges."""
-    gamedata = st.session_state.gamification
-    xp = gamedata["xp"]
-    level = gamedata["level"]
-    streak = gamedata["streak"]
-    badges = gamedata["badges"]
+    gam = st.session_state.gamification
+    xp = int(gam.get("xp", 0))
+    level = int(gam.get("level", 1))
+    streak = int(gam.get("streak", 0))
+    badges = gam.get("badges", [])
 
     st.markdown("---")
-    st.subheader("🏆 Your Progress")
-    st.progress((xp % 200) / 200)
+    st.subheader("🏆 Progress")
+    progress_val = (xp % 200) / 200
+    st.progress(progress_val)
     st.markdown(f"**Level:** {level}")
     st.markdown(f"**XP:** {xp}")
     st.markdown(f"🔥 Streak:** {streak} days**")
 
-    # 🎖️ Badge Grid Display
     if badges:
-        st.markdown("**🎖️ Badges:**")
-        badge_html = "<div style='display:flex;flex-wrap:wrap;gap:6px;'>"
+        st.markdown("**🏅 Badges:**")
         for b in badges:
-            badge_html += f"<div style='padding:6px 10px;border-radius:8px;background:rgba(0,191,166,0.1);border:1px solid rgba(0,191,166,0.4);color:#00BFA6;font-size:14px;font-weight:600;'>{b}</div>"
-        badge_html += "</div>"
-        st.markdown(badge_html, unsafe_allow_html=True)
+            st.markdown(f"- {b}")
 
-    # 🎯 Weekly Challenge Section
-    check_and_reset_weekly_challenge()
-    challenge = gamedata["weekly_challenge"]
-
+    challenge = gam.get("weekly_challenge")
     if challenge:
         st.markdown("---")
         st.subheader("🎯 Weekly Challenge")
-        progress = gamedata["challenge_progress"]
-        target = challenge["target"]
-        st.markdown(f"**{challenge['desc']}**")
-        st.progress(min(progress / target, 1.0))
-        if gamedata["challenge_completed"]:
-            st.success("✅ Challenge completed! Claim your reward below.")
+        st.markdown(f"**{challenge.get('desc')}**")
+        prog = int(gam.get("challenge_progress", 0))
+        target = int(challenge.get("target", 1))
+        st.progress(min(prog / target, 1.0))
+        if gam.get("challenge_completed"):
+            st.success("✅ Challenge completed!")
+
+# -----------------------------
+# Utilities
+# -----------------------------
+def save_all_state():
+    """Save the entire state to disk (called by app)."""
+    save_persistent_state(
+        st.session_state.get("gamification", {}),
+        st.session_state.get("profile", {}),
+        st.session_state.get("history", []),
+    )
+
+
+def reset_progress_file():
+    """Deletes saved progress."""
+    try:
+        if os.path.exists(PROGRESS_FILE):
+            os.remove(PROGRESS_FILE)
+            st.success("Progress file deleted.")
         else:
-            st.caption(f"Progress: {progress}/{target} • Reward: +{challenge['reward']} XP")
+            st.info("No progress file found.")
+    except Exception as e:
+        st.error(f"Could not remove file: {e}")
