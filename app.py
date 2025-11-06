@@ -195,7 +195,7 @@ def page_profile():
         time.sleep(1)
         # initialize gamification after profile saved
         init_gamification()
-        st.experimental_rerun()
+        st.rerun()
 
 # -----------------------------
 # UI: Main Chat (single-sidebar layout)
@@ -211,7 +211,7 @@ def page_chat():
             st.markdown(f"**{k.capitalize()}**: {v}")
         if st.button("✏️ Edit Profile", use_container_width=True):
             st.session_state.profile_submitted = False
-            st.experimental_rerun()
+            st.rerun()
 
         # gamification sidebar component
         render_progress_sidebar()
