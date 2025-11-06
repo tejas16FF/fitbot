@@ -1,4 +1,4 @@
-# app.py — FitBot (Single Sidebar, fixed FAQ buttons, gamification, inline history)
+# app.py — FitBot with persistent gamification (uses gamification.py)
 import os
 import time
 import random
@@ -14,16 +14,17 @@ from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# Gamification helper (make sure gamification.py is present)
+# Gamification (persistent)
 from gamification import (
     initialize_gamification,
     update_daily_login,
     reward_for_chat,
     render_progress_sidebar,
+    save_all_state,
 )
 
 # -----------------------------
-# CONFIG
+# Config
 # -----------------------------
 load_dotenv(".env")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
@@ -33,22 +34,14 @@ st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 
 FALLBACK_KB = "Knowledge base not found. Add data.txt to project root."
 
-# Motivational tips and FAQ pool
+# Tips and FAQ pool
 DAILY_TIPS = [
     "🏋️ Stay consistent — results come with patience.",
-    "💧 Drink enough water daily to stay energized.",
-    "🧠 Train your mind as much as your body.",
-    "🥗 Fuel your body, don’t starve it.",
-    "🔥 Progress is progress — even small steps count!",
-    "🧘 Take deep breaths; stress kills gains.",
-    "💪 Your only competition is your past self.",
-    "🏃 Move more today than you did yesterday.",
-    "😴 Recovery is part of training. Sleep well!",
-    "💥 The body achieves what the mind believes.",
-    "✨ Small improvements compound over time.",
-    "🔁 Consistency > Intensity.",
+    "💧 Drink water — hydrate for performance.",
+    "🧠 Small daily wins compound to big results.",
+    "🥗 Eat whole foods most of the time.",
+    "😴 Recovery matters — prioritize sleep.",
 ]
-
 FAQ_QUERIES = {
     "🏋️ Beginner Plan": "Give me a 3-day beginner workout plan.",
     "🍎 Post-Workout Meal": "What should I eat after a workout for recovery?",
@@ -56,48 +49,30 @@ FAQ_QUERIES = {
     "🔥 Fat Loss Tips": "How do I lose fat safely and sustainably?",
     "🧘 Quick Yoga": "Give me a 10-minute morning yoga routine.",
     "🚶 Warm-up": "Suggest dynamic warm-up exercises before workouts.",
-    "😴 Sleep & Recovery": "How does sleep affect recovery?",
-    "🏃 Cardio Plan": "Suggest a 20-minute fat-burning cardio session."
 }
 
 # -----------------------------
-# SESSION STATE init
+# Session init
 # -----------------------------
 if "history" not in st.session_state:
-    st.session_state.history: List[Dict[str, Any]] = []
-
+    st.session_state.history = []
 if "profile" not in st.session_state:
-    st.session_state.profile = {
-        "name": "",
-        "age": 25,
-        "weight": 70,
-        "goal": "General fitness",
-        "level": "Beginner",
-        "gender": "Prefer not to say",
-        "diet": "No preference",
-        "workout_time": "Morning",
-    }
-
+    st.session_state.profile = {"name": "", "age": 25, "weight": 70, "goal": "General fitness", "level": "Beginner", "gender": "Prefer not to say", "diet": "No preference", "workout_time": "Morning"}
 if "profile_submitted" not in st.session_state:
     st.session_state.profile_submitted = False
-
 if "tip_of_the_day" not in st.session_state:
     st.session_state.tip_of_the_day = random.choice(DAILY_TIPS)
-
-# Used to store a query triggered by FAQ buttons or chat input
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "Chat"
 if "pending_query" not in st.session_state:
     st.session_state.pending_query = None
-
-# small flag so we can show spinner + rotating tips while processing
 if "processing" not in st.session_state:
     st.session_state.processing = False
-
-# unique session id for stable keys
 if "session_id" not in st.session_state:
     st.session_state.session_id = random.randint(1, 10**9)
 
 # -----------------------------
-# Helpers: KB, embeddings, LLM
+# LangChain helpers
 # -----------------------------
 def read_knowledge_base(path="data.txt") -> str:
     return open(path, "r", encoding="utf-8").read() if os.path.exists(path) else FALLBACK_KB
@@ -115,12 +90,10 @@ def create_llm_chain(api_key: str):
         return None, None
     llm = ChatGoogleGenerativeAI(model=CHAT_MODEL, google_api_key=api_key, temperature=0.25)
     template = """
-You are FitBot, a professional and friendly AI fitness coach.
-Use the user's profile data to give personalized responses.
-Be supportive, concise, and practical. Never mention internal mechanics.
-
-User Profile: {profile}
-Conversation History: {chat_history}
+You are FitBot, an expert and friendly AI fitness coach.
+Use user's profile and recent chat history to give tailored, safe advice.
+Profile: {profile}
+History: {chat_history}
 Context: {context}
 Question: {question}
 Answer:
@@ -128,7 +101,7 @@ Answer:
     prompt = PromptTemplate(template=template, input_variables=["profile", "chat_history", "context", "question"])
     return llm, LLMChain(llm=llm, prompt=prompt)
 
-def format_history(history: List[Dict[str, Any]], limit=6) -> str:
+def format_history(history: List[Dict[str, Any]], limit=8) -> str:
     recent = history[-limit:]
     return "\n".join([f"User: {h['user']}\nAssistant: {h['assistant']}" for h in recent])
 
@@ -145,171 +118,170 @@ def generate_answer(chain: LLMChain, vectorstore, query: str, profile: Dict[str,
         return chain.predict(profile=profile_str, chat_history=chat_str, context=context, question=query)
     except Exception as e:
         st.error(f"Model error: {e}")
-        return "Sorry, I'm having trouble generating an answer right now."
+        return "Sorry — I couldn't generate an answer right now."
 
 # -----------------------------
-# Gamification initialization wrapper
-# -----------------------------
-def init_gamification():
-    initialize_gamification()
-    # daily login check
-    update_daily_login()
-
-# -----------------------------
-# UI: Profile page
+# UI sections
 # -----------------------------
 def page_profile():
-    st.title("🏋️ Welcome to FitBot")
-    st.markdown("Let's personalize your experience.")
-
+    st.title("🏋️ Profile")
     with st.form("profile_form"):
         name = st.text_input("Name", value=st.session_state.profile.get("name", ""))
         age = st.number_input("Age", min_value=10, max_value=80, value=int(st.session_state.profile.get("age", 25)))
         weight = st.number_input("Weight (kg)", min_value=30, max_value=200, value=int(st.session_state.profile.get("weight", 70)))
-        gender = st.selectbox("Gender", ["Male", "Female", "Other", "Prefer not to say"],
-                              index=["Male","Female","Other","Prefer not to say"].index(st.session_state.profile.get("gender", "Prefer not to say")))
-        goal = st.selectbox("Primary Goal", ["Weight loss", "Muscle gain", "Endurance", "General fitness"],
-                            index=["Weight loss","Muscle gain","Endurance","General fitness"].index(st.session_state.profile.get("goal", "General fitness")))
-        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"],
-                             index=["Beginner","Intermediate","Advanced"].index(st.session_state.profile.get("level", "Beginner")))
-        diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"],
-                            index=["No preference","Vegetarian","Vegan","Non-vegetarian"].index(st.session_state.profile.get("diet","No preference")))
-        workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"],
-                                    index=["Morning","Afternoon","Evening"].index(st.session_state.profile.get("workout_time","Morning")))
-
+        gender = st.selectbox("Gender", ["Male", "Female", "Other", "Prefer not to say"], index=["Male","Female","Other","Prefer not to say"].index(st.session_state.profile.get("gender","Prefer not to say")))
+        goal = st.selectbox("Goal", ["Weight loss", "Muscle gain", "Endurance", "General fitness"], index=["Weight loss","Muscle gain","Endurance","General fitness"].index(st.session_state.profile.get("goal","General fitness")))
+        level = st.selectbox("Experience Level", ["Beginner","Intermediate","Advanced"], index=["Beginner","Intermediate","Advanced"].index(st.session_state.profile.get("level","Beginner")))
+        diet = st.selectbox("Diet Preference", ["No preference","Vegetarian","Vegan","Non-vegetarian"], index=["No preference","Vegetarian","Vegan","Non-vegetarian"].index(st.session_state.profile.get("diet","No preference")))
+        workout_time = st.selectbox("Preferred Workout Time", ["Morning","Afternoon","Evening"], index=["Morning","Afternoon","Evening"].index(st.session_state.profile.get("workout_time","Morning")))
         submitted = st.form_submit_button("Save & Continue")
 
     if submitted:
-        st.session_state.profile.update({
-            "name": name,
-            "age": age,
-            "weight": weight,
-            "gender": gender,
-            "goal": goal,
-            "level": level,
-            "diet": diet,
-            "workout_time": workout_time,
-        })
+        st.session_state.profile.update({"name": name, "age": age, "weight": weight, "gender": gender, "goal": goal, "level": level, "diet": diet, "workout_time": workout_time})
         st.session_state.profile_submitted = True
-        st.success("Profile saved — loading FitBot...")
+        # initialize and load persistent gamification (this will also load saved profile/history into session)
+        initialize_gamification()
+        update_daily_login()
+        # immediate save of full state to disk
+        save_all_state()
+        st.success("Profile saved and persisted.")
         time.sleep(1)
-        # initialize gamification after profile saved
-        init_gamification()
         st.rerun()
 
-# -----------------------------
-# UI: Main Chat (single-sidebar layout)
-# -----------------------------
-def page_chat():
-    # ensure gamification initialized
-    init_gamification()
-
-    # LEFT: Sidebar (profile + gamification)
-    with st.sidebar:
-        st.header("👤 Profile")
-        for k, v in st.session_state.profile.items():
-            st.markdown(f"**{k.capitalize()}**: {v}")
-        if st.button("✏️ Edit Profile", use_container_width=True):
-            st.session_state.profile_submitted = False
-            st.rerun()
-
-        # gamification sidebar component
-        render_progress_sidebar()
-
-    # CENTER: Chat, tips, FAQ, history (history displayed below chat)
-    st.title("💬 FitBot — Your AI Fitness Assistant")
-    st.info(f"💡 Tip of the Day: {st.session_state.tip_of_the_day}")
-
-    # load kb + model
+def section_chat():
+    st.title("💬 Chat")
+    st.info(f"💡 Tip: {st.session_state.tip_of_the_day}")
     kb_text = read_knowledge_base("data.txt")
     vectorstore = build_vectorstore(kb_text)
     llm, chain = create_llm_chain(GOOGLE_KEY)
     if not chain:
-        st.error("❌ Gemini not initialized. Check .env GOOGLE_API_KEY.")
+        st.error("Gemini API not initialized.")
         return
 
-    # --- FAQ buttons (use on_click handlers) ---
-    st.markdown("### ⚡ Quick Fitness Queries")
-    # choose 4 distinct items, if less available then take all
+    st.subheader("⚡ Quick Queries")
     faq_pool = list(FAQ_QUERIES.items())
-    n_faq = min(4, len(faq_pool))
-    faq_items = random.sample(faq_pool, n_faq)
-    cols = st.columns(n_faq)
+    n = min(4, len(faq_pool))
+    faq_items = random.sample(faq_pool, n)
+    cols = st.columns(n)
+    for i, (label, q) in enumerate(faq_items):
+        if cols[i].button(label, key=f"faq_{st.session_state.session_id}_{i}"):
+            with st.spinner("Thinking..."):
+                ans = generate_answer(chain, vectorstore, q, st.session_state.profile, st.session_state.history)
+                st.session_state.history.append({"user": q, "assistant": ans, "time": time.time()})
+                reward_for_chat()
+                # persist after adding
+                save_all_state()
+                st.success(ans)
 
-    def _on_faq_click(q_text):
-        # set a pending query; actual processing occurs below the render
-        st.session_state.pending_query = q_text
-
-    for i, (label, qtext) in enumerate(faq_items):
-        # stable key per session + index
-        key = f"faq_{st.session_state.session_id}_{i}"
-        cols[i].button(label, key=key, on_click=_on_faq_click, args=(qtext,))
-
-    # --- Chat input (user) ---
-    user_input = st.chat_input("Ask FitBot a question (press Enter):")
-    if user_input:
-        # store as pending query to be processed in unified handler
-        st.session_state.pending_query = user_input
-
-    # --- Process pending query (either from FAQ or chat input) ---
-    if st.session_state.pending_query and not st.session_state.processing:
-        # mark processing so button can't trigger duplicate
-        st.session_state.processing = True
-        query_to_run = st.session_state.pending_query
-        st.session_state.pending_query = None  # consume the pending query
-
-        # show spinner and rotating motivational tip
-        tip_box = st.empty()
-        spinner_text = random.choice(DAILY_TIPS)
-
-        # HTML tip box with fade (works in many themes)
-        tip_html = f"""
-        <div style="padding:10px;border-radius:8px;text-align:center;font-weight:600;">
-            💭 {spinner_text}
-        </div>
-        """
-        tip_box.markdown(tip_html, unsafe_allow_html=True)
-
-        with st.spinner("Thinking and retrieving relevant information..."):
-            start = time.time()
-            answer = generate_answer(chain, vectorstore, query_to_run, st.session_state.profile, st.session_state.history)
-            latency = time.time() - start
-
-        # reward, save history, show answer
-        try:
+    query = st.chat_input("Ask your question:")
+    if query:
+        with st.spinner(random.choice(DAILY_TIPS)):
+            ans = generate_answer(chain, vectorstore, query, st.session_state.profile, st.session_state.history)
+            st.session_state.history.append({"user": query, "assistant": ans, "time": time.time()})
             reward_for_chat()
-        except Exception:
-            # gamification might error in some envs; continue gracefully
-            pass
+            save_all_state()
+            st.success(ans)
 
-        st.session_state.history.append({"user": query_to_run, "assistant": answer, "time": latency})
-
-        # clear processing state & tip
-        st.session_state.processing = False
-        tip_box.empty()
-
-        # show result
-        st.success(answer)
-
-    # --- History display (center, below chat) ---
-    st.markdown("### 📚 Recent Conversations")
+def section_history():
+    st.title("📜 History")
     if not st.session_state.history:
-        st.info("No history yet. Ask a question or click a quick query above.")
-    else:
-        # show most recent first; collapsible expanders
-        for i, turn in enumerate(reversed(st.session_state.history[-15:])):
-            with st.expander(f"Q: {turn['user'][:80]}"):
-                st.markdown(f"**Question:** {turn['user']}")
-                st.markdown(f"**Answer:** {turn['assistant']}")
-                st.caption(f"Response time: {turn.get('time', 0):.2f}s")
+        st.info("No history available yet.")
+        return
+    for i, turn in enumerate(reversed(st.session_state.history[-30:])):
+        with st.expander(f"Q{i+1}: {turn['user'][:80]}"):
+            st.markdown(f"**Q:** {turn['user']}")
+            st.markdown(f"**A:** {turn['assistant']}")
+            st.caption(f"Time: {turn.get('time', 0):.2f}s")
+
+def section_challenges():
+    st.title("🏆 Challenges")
+    gam = st.session_state.gamification
+    check_and = None
+    try:
+        # check_and_reset_weekly_challenge exists in gamification; call indirectly by rendering sidebar
+        pass
+    except Exception:
+        pass
+    render_progress_sidebar()  # reuse UI
+    if gam.get("weekly_challenge"):
+        st.markdown("**Current challenge:**")
+        ch = gam.get("weekly_challenge")
+        st.markdown(f"- {ch.get('desc')} (Progress: {gam.get('challenge_progress',0)}/{ch.get('target')})")
+    st.caption("Complete challenges to earn bonus XP. Progress persists between runs.")
+
+def section_progress():
+    st.title("🎖 Progress")
+    render_progress_sidebar()
+
+def section_statistics():
+    st.title("📊 Statistics")
+    gam = st.session_state.gamification
+    # XP timeline: use history of saved snapshots — we'll synthesize from history length as simple demo
+    try:
+        # Build a simple XP-over-time sample from history: assume +10 per chat + 50 for daily logins recorded in gam
+        xp = gam.get("xp", 0)
+        level = gam.get("level", 1)
+        st.markdown(f"**Current XP:** {xp}  •  **Level:** {level}")
+        # Basic metrics
+        completed = sum(1 for _ in gam.get("badges", []))
+        st.markdown(f"**Badges unlocked:** {completed}")
+        st.markdown(f"**Streak:** {gam.get('streak',0)} days")
+    except Exception as e:
+        st.warning(f"Could not render statistics: {e}")
 
 # -----------------------------
-# CONTROL FLOW
+# Sidebar navigation
 # -----------------------------
+def sidebar():
+    st.sidebar.header("👤 Profile")
+    for k, v in st.session_state.profile.items():
+        st.sidebar.markdown(f"**{k.capitalize()}**: {v}")
+    if st.sidebar.button("Edit Profile"):
+        st.session_state.profile_submitted = False
+        st.rerun()
+
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Navigate")
+    if st.sidebar.button("Chat"):
+        st.session_state.current_page = "Chat"
+    if st.sidebar.button("History"):
+        st.session_state.current_page = "History"
+    if st.sidebar.button("Challenges"):
+        st.session_state.current_page = "Challenges"
+    if st.sidebar.button("Progress"):
+        st.session_state.current_page = "Progress"
+    if st.sidebar.button("Statistics"):
+        st.session_state.current_page = "Statistics"
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("FitBot — Persistent Progress")
+
+# -----------------------------
+# Control flow
+# -----------------------------
+# On first run (or after profile saved), initialize persistent gamification
+if "initialized_persistence" not in st.session_state:
+    initialize_gamification()
+    update_daily_login()
+    st.session_state.initialized_persistence = True
+    # ensure profile/history/gamification persisted on first run
+    save_all_state()
+
 if not st.session_state.profile_submitted:
     page_profile()
 else:
-    page_chat()
+    sidebar()
+    page = st.session_state.current_page or "Chat"
+    if page == "Chat":
+        section_chat()
+    elif page == "History":
+        section_history()
+    elif page == "Challenges":
+        section_challenges()
+    elif page == "Progress":
+        section_progress()
+    elif page == "Statistics":
+        section_statistics()
 
 st.markdown("---")
-st.caption("FitBot — Personalized AI Fitness Coach | XP, Badges, Challenges")
+st.caption("FitBot — Persistent Progress. Saved to user_progress.json")
