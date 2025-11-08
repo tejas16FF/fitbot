@@ -1,4 +1,4 @@
-# app.py — FitBot (Polished UI + Persistent Gamification + Fixed FAQ + Loading Screen)
+# app.py (updated to show progress only on Challenges page + popup)
 import os
 import time
 import random
@@ -6,45 +6,25 @@ import streamlit as st
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 
-# load environment
 load_dotenv(".env")
 
-# Optional heavy imports — fail gracefully
-try:
-    from langchain.text_splitter import CharacterTextSplitter
-    from langchain_community.embeddings import HuggingFaceEmbeddings
-    from langchain_community.vectorstores import FAISS
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    LANG_OK = True
-except Exception:
-    LANG_OK = False
-    CharacterTextSplitter = None
-    HuggingFaceEmbeddings = None
-    FAISS = None
-    ChatGoogleGenerativeAI = None
-
-# Import gamification
+# Import gamification utilities
 from gamification import (
     initialize_gamification,
     update_daily_login,
     reward_for_chat,
-    render_progress_sidebar,
-    save_all_state,
     update_challenge_progress,
+    render_progress_sidebar_full,
+    render_weekly_challenge_section,
+    show_challenge_popup,
+    save_all_state,
+    reset_progress_file,
 )
 
-# -----------------------------
-# CONFIG
-# -----------------------------
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 
-GOOGLE_KEY = os.getenv("GOOGLE_API_KEY", "")
-CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
-DATA_FILE = "data.txt"
-ACCENT_COLOR = "#0FB38B"
-
 # -----------------------------
-# INIT STATE
+# Session defaults
 # -----------------------------
 if "profile" not in st.session_state:
     st.session_state.profile = {
@@ -65,64 +45,43 @@ if "current_page" not in st.session_state:
 if "session_id" not in st.session_state:
     st.session_state.session_id = random.randint(1000, 9999)
 
-if "loading_transition" not in st.session_state:
-    st.session_state.loading_transition = False
-
 initialize_gamification()
 
 # -----------------------------
-# KNOWLEDGE BASE (fallback)
+# Knowledge base
 # -----------------------------
-def load_kb(path="data.txt") -> str:
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
+DATA_FILE = "data.txt"
+def load_kb():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
             return f.read()
-    return "Regular exercise improves health and builds strength."
+    return "Regular exercise improves cardiovascular health and builds muscle strength."
 
-KB_TEXT = load_kb(DATA_FILE)
+KB_TEXT = load_kb()
 
 # -----------------------------
-# SIMPLE ANSWER FALLBACK
+# Simple fallback answer function
 # -----------------------------
 def local_lookup_answer(query: str) -> str:
-    lines = [p for p in KB_TEXT.split("\n\n") if p.strip()]
     q = query.lower()
-    for l in lines:
-        if any(k in l.lower() for k in q.split()):
-            return l
-    return "Stay consistent with workouts, eat balanced meals, and rest well."
+    paragraphs = [p.strip() for p in KB_TEXT.split("\n\n") if p.strip()]
+    if not paragraphs:
+        return "I don't have data right now — try a different question."
+    best = None
+    best_score = 0
+    for p in paragraphs:
+        score = sum(1 for w in q.split() if w and w in p.lower())
+        if score > best_score:
+            best_score = score
+            best = p
+    if best_score > 0:
+        return best
+    return "I couldn't find an exact match. General advice: be consistent, eat balanced, and recover well."
 
 # -----------------------------
-# BUILD LLM WRAPPER (if available)
+# UI helpers
 # -----------------------------
-def create_chain():
-    if LANG_OK and GOOGLE_KEY:
-        try:
-            model = ChatGoogleGenerativeAI(model=CHAT_MODEL, google_api_key=GOOGLE_KEY, temperature=0.3)
-            class Chain:
-                def predict(self, **kwargs):
-                    q = kwargs.get("question") or ""
-                    return model.invoke(q).content if hasattr(model, "invoke") else str(model(q))
-            return Chain()
-        except Exception:
-            return None
-    return None
-
-_chain = create_chain()
-
-def get_answer(query: str):
-    if _chain:
-        try:
-            return _chain.predict(question=query)
-        except Exception:
-            return local_lookup_answer(query)
-    else:
-        return local_lookup_answer(query)
-
-# -----------------------------
-# SIDEBAR
-# -----------------------------
-def sidebar():
+def sidebar_nav():
     st.sidebar.title("FitBot Navigation")
     if st.sidebar.button("🏠 Chat"):
         st.session_state.current_page = "Chat"
@@ -134,40 +93,43 @@ def sidebar():
         st.session_state.current_page = "Progress"
     if st.sidebar.button("⚙️ Profile"):
         st.session_state.current_page = "Profile"
+    st.sidebar.markdown("---")
+    # small profile summary
+    st.sidebar.markdown(f"**Name:** {st.session_state.profile.get('name','—')}")
+    st.sidebar.markdown(f"**Goal:** {st.session_state.profile.get('goal','—')}")
+    st.sidebar.markdown("---")
+    # Testing tools (optional)
+    if st.sidebar.button("Reset progress (dev only)"):
+        reset_progress_file()
+        initialize_gamification()
+        st.experimental_rerun()
 
-    if st.session_state.current_page != "Profile" and not st.session_state.loading_transition:
-        render_progress_sidebar()
-
-# -----------------------------
-# FAQ Section
-# -----------------------------
+# FAQ definitions
 FAQ_QUERIES = {
     "🏋️ 3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
     "🥗 Post-Workout Meal": "What should I eat after my workout for recovery?",
     "💪 Vegetarian Protein": "List high-protein vegetarian foods.",
     "🔥 Fat Loss Tips": "How can I lose fat safely and sustainably?",
     "🧘 Quick Yoga": "Give a 10-minute morning yoga stretch routine.",
+    "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout."
 }
 
 def faq_button_key(i: int, label: str) -> str:
-    return f"faq_{st.session_state.session_id}_{i}_{label.replace(' ', '_')}"
+    return f"faq_{st.session_state.session_id}_{i}_{label.replace(' ','_')}"
 
 # -----------------------------
-# PAGES
+# Pages
 # -----------------------------
 def page_profile():
-    st.title("🏋️ Create Your Fitness Profile")
-    st.markdown("Enter a few details to personalize FitBot for you.")
-
+    st.title("🏋️ Profile")
     with st.form("profile_form"):
         name = st.text_input("Name", st.session_state.profile.get("name", ""))
-        age = st.number_input("Age", 10, 80, st.session_state.profile.get("age", 25))
-        weight = st.number_input("Weight (kg)", 30, 200, st.session_state.profile.get("weight", 70))
-        goal = st.selectbox("Goal", ["General fitness", "Weight loss", "Muscle gain", "Endurance"])
-        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
-        diet = st.selectbox("Diet", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
+        age = st.number_input("Age", 10, 80, int(st.session_state.profile.get("age", 25)))
+        weight = st.number_input("Weight (kg)", 30, 200, int(st.session_state.profile.get("weight", 70)))
+        goal = st.selectbox("Primary Goal", ["General fitness", "Weight loss", "Muscle gain", "Endurance"], index=0)
+        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"], index=0)
+        diet = st.selectbox("Diet", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"], index=0)
         submitted = st.form_submit_button("Save & Continue")
-
     if submitted:
         st.session_state.profile.update({
             "name": name,
@@ -177,93 +139,106 @@ def page_profile():
             "level": level,
             "diet": diet,
         })
-        save_all_state()
+        # update login silently and persist
         update_daily_login(silent=True)
-        st.session_state.loading_transition = True
-        st.rerun()
-
-    if st.session_state.loading_transition:
-        # loading animation page
-        st.markdown(
-            f"""
-            <div style='text-align:center; padding-top:100px;'>
-                <h2>💪 Setting up your personalized FitBot...</h2>
-                <p style='color:{ACCENT_COLOR}; font-weight:500;'>Loading workouts, nutrition data, and challenges...</p>
-            </div>
-            <script>
-                setTimeout(function() {{
-                    window.location.reload();
-                }}, 2500);
-            </script>
-            """,
-            unsafe_allow_html=True,
-        )
-        time.sleep(2.5)
-        st.session_state.loading_transition = False
+        save_all_state()
+        st.success("Profile saved. Launching chat...")
+        time.sleep(0.6)
         st.session_state.current_page = "Chat"
-        st.rerun()
+        st.experimental_rerun()
 
 def page_chat():
     st.title("💬 Chat — FitBot")
     st.markdown("Ask me anything about workouts, diet, or motivation.")
-
-    faq_cols = st.columns(3)
-    for i, (label, q) in enumerate(FAQ_QUERIES.items()):
-        key = faq_button_key(i, label)
-        if faq_cols[i % 3].button(label, key=key):
+    cols = st.columns(3)
+    displayed = list(FAQ_QUERIES.items())[:3]
+    for i, (label, q) in enumerate(displayed):
+        if cols[i].button(label, key=faq_button_key(i, label)):
             handle_query(q)
-
     user_q = st.chat_input("Ask FitBot your question:")
     if user_q:
         handle_query(user_q)
+    # show small history preview
+    st.markdown("### Recent Q&A")
+    if not st.session_state.history:
+        st.info("No chats yet.")
+    else:
+        for turn in reversed(st.session_state.history[-5:]):
+            with st.expander(f"Q: {turn['user'][:60]}"):
+                st.markdown(f"**A:** {turn['assistant']}")
 
-def handle_query(user_query: str):
+def handle_query(query_text: str):
     placeholder = st.empty()
-    placeholder.info("💭 Generating answer... please wait.")
+    # small loading indicator so user knows it's running
+    with placeholder.container():
+        st.info("💭 Generating answer — please wait...")
     start = time.time()
-    answer = get_answer(user_query)
+    # obtain answer (local fallback)
+    answer = local_lookup_answer(query_text)
     latency = round(time.time() - start, 2)
+    # clear placeholder
     placeholder.empty()
-
-    st.session_state.history.append({"user": user_query, "assistant": answer, "time": latency})
-    reward_for_chat(show_msg=False)
-    update_challenge_progress("chat")
-    save_all_state()
-
+    # append history + persist
+    st.session_state.history.append({"user": query_text, "assistant": answer, "time": latency})
+    # reward chat xp, update weekly progress, persist
+    try:
+        reward_for_chat(show_msg=False)
+        update_challenge_progress("chat")
+        save_all_state()
+    except Exception:
+        pass
     st.success(answer)
 
 def page_history():
-    st.title("📜 Chat History")
+    st.title("📜 History")
     if not st.session_state.history:
-        st.info("No chats yet — start by asking FitBot something!")
+        st.info("No chats yet.")
         return
-    for i, turn in enumerate(reversed(st.session_state.history[-20:])):
-        with st.expander(f"Q: {turn['user'][:50]}"):
-            st.markdown(f"**Q:** {turn['user']}")
-            st.markdown(f"**A:** {turn['assistant']}")
-            st.caption(f"Time: {turn['time']} sec")
-
-def page_progress():
-    st.title("🏆 Progress")
-    render_progress_sidebar()
+    for i, t in enumerate(reversed(st.session_state.history[-50:])):
+        with st.expander(f"Q {i+1}: {t['user'][:70]}"):
+            st.markdown(f"**Q:** {t['user']}")
+            st.markdown(f"**A:** {t['assistant']}")
+            st.caption(f"Time: {t.get('time')}s")
 
 def page_challenges():
     st.title("🎯 Challenges")
-    gam = st.session_state.gamification
-    ch = gam.get("weekly_challenge", {})
-    if not ch:
-        st.info("No active weekly challenge yet.")
-    else:
-        st.markdown(f"**{ch.get('desc', 'No description')}**")
-        st.progress(min(gam.get("challenge_progress", 0) / ch.get("target", 1), 1.0))
+    # show full progress + challenge (only here)
+    render_progress_sidebar_full()
+    render_weekly_challenge_section()
+    st.markdown("---")
+    st.markdown("Manual actions (log to progress challenges):")
+    col1, col2, col3 = st.columns(3)
+    if col1.button("Log: Completed a workout (manual)"):
+        update_challenge_progress("manual")
+        save_all_state()
+        st.success("Logged workout — progress updated.")
+    if col2.button("Log: Did a check-in (manual)"):
+        update_challenge_progress("login")
+        save_all_state()
+        st.success("Logged check-in — progress updated.")
+    if col3.button("Claim weekly reward (if complete)"):
+        gam = st.session_state.gamification
         if gam.get("challenge_completed"):
-            st.success("✅ Challenge completed!")
+            # popup already shown by gamification when completed, but repeat gentle message
+            show_challenge_popup("🎉 Weekly reward already claimed. Great job!")
+        else:
+            st.info("Challenge not complete yet.")
+
+def page_progress():
+    st.title("🏆 Progress")
+    render_progress_sidebar_full()
+    st.markdown("### Badges")
+    badges = st.session_state.gamification.get("badges", [])
+    if not badges:
+        st.info("No badges yet.")
+    else:
+        st.write(", ".join(badges))
 
 # -----------------------------
-# MAIN
+# Main
 # -----------------------------
 def main():
-    sidebar()
+    sidebar_nav()
     page = st.session_state.current_page
     if page == "Profile":
         page_profile()
