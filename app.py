@@ -1,31 +1,30 @@
-# app.py — FitBot (Fitness-theme UI, top centered nav, ripple, fade loading, goal-aware FAQ)
+# app.py — FitBot (Google Embeddings + Chroma, Fitness UI, top navbar)
 import os, time, random
 import streamlit as st
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 
-# LangChain stack (versions pinned in your requirements.txt)
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+# LangChain (lightweight path)
+from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import CharacterTextSplitter
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 
-# Gamification
+# Gamification (lightweight)
 from gamification import (
     init_gamification, save_all_state, mark_daily_login,
     reward_for_chat, render_progress_block, get_weekly, complete_challenge
 )
 
-# ---------- Config ----------
+# ---------------- Config ----------------
 load_dotenv(".env")
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 CHAT_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-pro")
 ACCENT = "#00E1C1"
 
-# ---------- CSS (Fitness app style + ripple) ----------
+# ---------------- CSS ----------------
 st.markdown(f"""
 <style>
   html, body, .stApp {{
@@ -46,55 +45,47 @@ st.markdown(f"""
   .navbtn:hover {{ border-color: {ACCENT}; }}
   .navbtn:active {{ transform: scale(.98); }}
   .navbtn.active {{ color: {ACCENT}; border-color: {ACCENT}; }}
-  /* ripple */
-  .navbtn::after {{
-    content: ""; position: absolute; width: 12px; height: 12px; background: {ACCENT};
-    border-radius: 50%; opacity: .25; transform: scale(1); transition: transform .5s, opacity .7s;
-    pointer-events: none;
-  }}
-  .navbtn.ripple::after {{ transform: scale(18); opacity: 0; }}
-  /* Chat bubbles */
   .bubble-user {{
     background:#1a2438; border:1px solid rgba(255,255,255,.06); padding:12px 14px; border-radius:14px;
   }}
   .bubble-bot {{
     background:#0f1626; border:1px solid rgba(255,255,255,.06); padding:12px 14px; border-radius:14px;
   }}
-  /* FAQ button ripple */
   .faqbtn {{
     background:#10182a; color:#cfe; border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:10px;
     font-weight:700; width:100%; position:relative; overflow:hidden;
   }}
   .faqbtn:hover {{ border-color:{ACCENT}; }}
-  .faqbtn::after {{
-    content:""; position:absolute; left:50%; top:50%; width:8px; height:8px; background:{ACCENT};
-    transform: translate(-50%,-50%) scale(1); opacity:.3; border-radius:50%; transition: opacity .6s, transform .5s;
-  }}
-  .faqbtn.ripple::after {{ transform: translate(-50%,-50%) scale(20); opacity:0; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- Session ----------
+# ---------------- Session ----------------
 if "page" not in st.session_state: st.session_state.page = "Chat"
 if "profile" not in st.session_state:
-    st.session_state.profile = {"name":"","age":25,"weight":70,"goal":"General fitness","level":"Beginner","diet":"No preference"}
+    st.session_state.profile = {
+        "name":"", "age":25, "weight":70,
+        "goal":"General fitness", "level":"Beginner", "diet":"No preference"
+    }
 if "history" not in st.session_state: st.session_state.history = []
-if "session_id" not in st.session_state: st.session_state.session_id = random.randint(1_000_000,9_999_999)
+if "session_id" not in st.session_state: st.session_state.session_id = random.randint(1_000_000, 9_999_999)
+
 init_gamification()
 
-# ---------- Data / KB ----------
+# ---------------- KB & Chain (lightweight) ----------------
 def load_kb_text():
     p = "data.txt"
-    if os.path.exists(p): 
-        with open(p,"r",encoding="utf-8") as f: return f.read()
-    return "Train consistently, eat balanced meals, hydrate, and prioritize sleep."
+    if os.path.exists(p):
+        with open(p, "r", encoding="utf-8") as f: return f.read()
+    return "Train consistently, choose balanced nutrition, hydrate, and sleep well."
 
 @st.cache_resource(show_spinner=False)
 def build_store(text: str):
     splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
     docs = splitter.create_documents([text])
-    embeds = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return FAISS.from_documents(docs, embeds)
+    # Google embeddings (no local model downloads)
+    embeds = GoogleGenerativeAIEmbeddings(model="models/embedding-001", google_api_key=GOOGLE_KEY)
+    # In-memory Chroma (no disk persistence)
+    return Chroma.from_documents(docs, embeds, collection_name="fitbot_memory")
 
 @st.cache_resource(show_spinner=False)
 def build_chain():
@@ -116,29 +107,33 @@ def build_chain():
     return llm, LLMChain(llm=llm, prompt=prompt)
 
 def retrieve(store, q: str, k=3):
-    docs = store.as_retriever(search_kwargs={"k":k}).get_relevant_documents(q)
+    docs = store.as_retriever(search_kwargs={"k": k}).get_relevant_documents(q)
     return "\n\n---\n\n".join(d.page_content for d in docs)
 
-# ---------- Navbar ----------
+# ---------------- Navbar ----------------
 def top_nav():
     st.markdown('<div class="topbar"><div class="navwrap">', unsafe_allow_html=True)
-    cols = st.columns([1,1,1,1,1,1,1,1])  # spacing around center
+    cols = st.columns([1,1,1,1,1,1,1,1])  # center the 4
     c3,c4,c5,c6 = cols[2], cols[3], cols[4], cols[5]
+
     def btn(col, label, page):
-        active = "active" if st.session_state.page == page else ""
-        b = col.button(label, key=f"nav_{page}_{st.session_state.session_id}",
-                       help=page, type="secondary")
-        st.markdown(f"<script>document.querySelector('button[kind=\"secondary\"][data-testid=\"stWidgetKey-{f'nav_{page}_{st.session_state.session_id}'}\"] )?.classList.add('navbtn','{active}');</script>", unsafe_allow_html=True)
-        if b:
+        active = " active" if st.session_state.page == page else ""
+        if col.button(label, key=f"nav_{page}_{st.session_state.session_id}"):
             st.session_state.page = page
             st.rerun()
+        # Mark style class after render
+        st.markdown(
+            f"<script>Array.from(document.querySelectorAll('button')).filter(b=>b.innerText.trim()==='{label}')[0]?.classList.add('navbtn{active}');</script>",
+            unsafe_allow_html=True,
+        )
+
     btn(c3, "🏠 Home", "Chat")
     btn(c4, "🧾 History", "History")
     btn(c5, "🎯 Challenges", "Challenges")
     btn(c6, "👤 Profile", "Profile")
     st.markdown('</div></div>', unsafe_allow_html=True)
 
-# ---------- FAQ (goal-aware) ----------
+# ---------------- FAQ ----------------
 BASE_FAQ = [
     ("💧 Hydration", "How much water should I drink per day?"),
     ("🧘 Recovery", "What are the best post-workout recovery tips?"),
@@ -149,28 +144,31 @@ GOAL_FAQ = {
     "Muscle gain": [
         ("💪 Hypertrophy Split", "Give me a 4-day muscle gain split."),
         ("🍽️ Protein Targets", "How much protein per day for muscle gain?"),
+        ("🏋️ Progressive Overload", "How to implement progressive overload each week?")
     ],
     "Weight loss": [
         ("🔥 Fat Loss Plan", "Give me a 5-day weight loss plan with meals."),
         ("🥗 Calorie Deficit", "How to create a sustainable calorie deficit?"),
+        ("🚴 Cardio Mix", "How much cardio per week for fat loss?")
     ],
     "Endurance": [
         ("🏃 5K Plan", "Create a simple 3-week beginner 5K plan."),
         ("⚡ HIIT", "Give a 20-minute HIIT routine for endurance."),
+        ("🫀 Zone Training", "How do I use heart rate zones effectively?")
     ],
     "General fitness": [
         ("🏋️ 3-Day Plan", "Give me a 3-day beginner full-body workout plan."),
         ("🥗 Balanced Diet", "What should a balanced diet include daily?"),
+        ("📈 Consistency", "How do I build a consistent weekly routine?")
     ],
 }
 
 def get_faq_for_profile():
     goal = st.session_state.profile.get("goal","General fitness")
     items = BASE_FAQ + GOAL_FAQ.get(goal, GOAL_FAQ["General fitness"])
-    # rotate randomly each render
-    return random.sample(items, k=min(6,len(items)))
+    return random.sample(items, k=min(6, len(items)))
 
-# ---------- Loading tip (fade in/out) ----------
+# ---------------- Loading tips ----------------
 TIPS = [
     "Consistency beats intensity — show up today.",
     "Hydration powers performance. Sip water.",
@@ -192,7 +190,7 @@ def loading_tips():
     """
     st.markdown(html, unsafe_allow_html=True)
 
-# ---------- Pages ----------
+# ---------------- Pages ----------------
 def page_profile():
     st.header("👤 Your Profile")
     with st.form("profile_form"):
@@ -220,13 +218,15 @@ def page_chat():
     store = build_store(kb_text)
     llm, chain = build_chain()
     if not llm:
-        st.error("❌ GOOGLE_API_KEY not found in .env"); return
+        st.error("❌ GOOGLE_API_KEY not found in .env")
+        return
 
     st.subheader("⚡ Quick Questions")
     faq_items = get_faq_for_profile()
     cols = st.columns(3)
-    for i,(label,q) in enumerate(faq_items):
-        if cols[i%3].button(label, key=f"faq_{st.session_state.session_id}_{i}"):
+    for i, (label, q) in enumerate(faq_items):
+        key = f"faq_{st.session_state.session_id}_{i}"
+        if cols[i % 3].button(label, key=key):
             run_query(q, store, chain)
 
     user_q = st.chat_input("Ask anything about workouts, diet, recovery, motivation:")
@@ -243,8 +243,7 @@ def page_chat():
                 st.markdown(f"<div class='bubble-bot' style='margin-top:8px'><b>A:</b> {t['assistant']}</div>", unsafe_allow_html=True)
 
 def run_query(q: str, store, chain):
-    placeholder = st.empty()
-    loading_tips()  # show tips while working
+    loading_tips()
     with st.spinner("Generating your personalized response..."):
         start = time.time()
         context = retrieve(store, q, k=3)
@@ -252,10 +251,9 @@ def run_query(q: str, store, chain):
         profile = ", ".join([f"{k}: {v}" for k,v in st.session_state.profile.items()])
         try:
             ans = chain.predict(profile=profile, chat_history=history, context=context, question=q)
-        except Exception as e:
+        except Exception:
             ans = "Sorry, I had trouble answering just now. Please try again."
         latency = time.time() - start
-    placeholder.empty()
     st.session_state.history.append({"user": q, "assistant": ans, "time": round(latency,2)})
     reward_for_chat()
     save_all_state()
@@ -266,7 +264,7 @@ def page_history():
     if not st.session_state.history:
         st.info("No chats yet.")
     else:
-        for i,t in enumerate(reversed(st.session_state.history)):
+        for i, t in enumerate(reversed(st.session_state.history)):
             with st.expander(f"{i+1}. {t['user'][:90]}"):
                 st.markdown(f"<div class='bubble-user'><b>Q:</b> {t['user']}</div>", unsafe_allow_html=True)
                 st.markdown(f"<div class='bubble-bot' style='margin-top:8px'><b>A:</b> {t['assistant']}</div>", unsafe_allow_html=True)
@@ -282,7 +280,11 @@ def page_challenges():
     if st.button("Mark Weekly Challenge Completed", key=f"wk_done_{st.session_state.session_id}"):
         complete_challenge(wk["id"]); save_all_state(); st.rerun()
 
-# ---------- Router ----------
+# ---------------- Router ----------------
+def top_nav():
+    # already defined above (kept name)
+    pass  # placeholder to avoid confusion (real function defined earlier)
+
 def render_page():
     page = st.session_state.page
     if page == "Chat": page_chat()
@@ -292,10 +294,10 @@ def render_page():
     else:
         st.session_state.page = "Chat"; page_chat()
 
-# ---------- App ----------
 def main():
-    top_nav()               # centered, sticky, ripple
-    render_page()           # page content
+    # draw nav (real function call above)
+    globals()["top_nav"]()
+    render_page()
 
 if __name__ == "__main__":
     main()
