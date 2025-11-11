@@ -1,11 +1,10 @@
-# app.py — FitBot (Desktop bottom nav + Mobile drawer, FAQ fixed, Tip once after profile)
+# app.py — FitBot (Stable UI, Local KB, Bottom Nav Desktop + Mobile Drawer)
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
 
-# Gamification
 from gamification import (
     initialize_gamification,
     update_daily_login,
@@ -15,17 +14,14 @@ from gamification import (
     render_weekly_challenge_section,
     show_challenge_popup,
     save_all_state,
-    reset_progress_file,
 )
 
+# ---------- Setup ----------
 load_dotenv(".env")
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
-
 ACCENT = "#0FB38B"
 
-# -----------------------------
-# Session defaults
-# -----------------------------
+# ---------- Session Defaults ----------
 if "profile" not in st.session_state:
     st.session_state.profile = {
         "name": "",
@@ -38,29 +34,38 @@ if "profile" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = []
 if "page" not in st.session_state:
-    st.session_state.page = "Profile"
+    st.session_state.page = "Profile"  # start at profile only once
+if "profile_completed" not in st.session_state:
+    st.session_state.profile_completed = False
 if "session_id" not in st.session_state:
     st.session_state.session_id = random.randint(1_000_000, 9_999_999)
 if "tip_after_profile" not in st.session_state:
     st.session_state.tip_after_profile = None
+if "drawer_open" not in st.session_state:
+    st.session_state.drawer_open = False
 
 initialize_gamification()
 
-# -----------------------------
-# Knowledge base (fallback text)
-# -----------------------------
+# ---------- Knowledge Base ----------
 DATA_FILE = "data.txt"
-def load_kb():
+def load_kb() -> str:
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return f.read()
-    return "Regular exercise improves cardiovascular health and builds muscle strength."
-
+    # safe fallback
+    return (
+        "Regular exercise improves cardiovascular health and builds muscle strength.\n"
+        "A balanced diet should include proteins, carbohydrates, healthy fats, vitamins, and minerals.\n"
+        "Hydration, sleep, and recovery are essential."
+    )
 KB_TEXT = load_kb()
 
 def local_lookup_answer(query: str) -> str:
+    """Lightweight keyword-based answer from data.txt."""
     q = query.lower()
     paras = [p.strip() for p in KB_TEXT.split("\n\n") if p.strip()]
+    if not paras:
+        return "Train consistently, eat a balanced diet, hydrate well, and prioritize sleep."
     best, score = "", 0
     for p in paras:
         s = sum(1 for w in q.split() if w and w in p.lower())
@@ -70,98 +75,91 @@ def local_lookup_answer(query: str) -> str:
         return "Stay consistent with training, eat a balanced diet, hydrate well, and prioritize sleep."
     return best
 
-# -----------------------------
-# Navigation — Desktop bottom bar & Mobile drawer
-# -----------------------------
-def nav_render():
-    # CSS to show bottom bar only on >=768px; drawer button on <768px
-    st.markdown(f"""
-    <style>
-      /* Bottom bar (desktop) */
-      .bottom-nav {{
-        position: fixed; bottom: 0; left: 0; right: 0; z-index: 999;
-        background: rgba(0,0,0,0.03);
-        backdrop-filter: blur(6px);
-        border-top: 1px solid rgba(0,0,0,0.08);
-        padding: 8px 12px;
-        display: none;
-      }}
-      @media (min-width: 769px) {{
-        .bottom-nav {{ display: block; }}
-        .mobile-hamburger {{ display: none !important; }}
-      }}
-      @media (max-width: 768px) {{
-        .bottom-nav {{ display: none; }}
-        .mobile-hamburger {{ display: block; }}
-      }}
-      .btn-nav {{
-        display:inline-block; margin: 0 6px; padding: 10px 12px;
-        border-radius: 10px; border: 1px solid rgba(0,0,0,0.08);
-        background: white;
-        font-weight: 600; cursor: pointer; text-decoration:none; color:#111;
-      }}
-      .btn-nav.active {{ border-color: {ACCENT}; color: {ACCENT}; }}
-      .mobile-hamburger {{
-        position: fixed; top: 10px; left: 10px; z-index: 1000;
-        background: white; border-radius: 10px; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.08);
-      }}
-      /* Drawer */
-      #drawer {{
-        position: fixed; top: 0; left: 0; bottom: 0; width: 76%;
-        max-width: 300px; background: #fff; z-index: 1200;
-        box-shadow: 2px 0 20px rgba(0,0,0,0.15);
-        transform: translateX(-105%);
-        transition: transform .28s ease-in-out;
-        padding: 16px;
-      }}
-      #drawer.open {{ transform: translateX(0%); }}
-      .drawer-item {{
-        display:block; padding: 12px 8px; margin: 6px 0; font-weight: 700; color: #111; border-radius:10px; border:1px solid rgba(0,0,0,0.06);
-      }}
-    </style>
-    <div class="mobile-hamburger">
-      <button onclick="document.getElementById('drawer').classList.add('open');">☰ Menu</button>
-    </div>
-    <div id="drawer">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <strong style="font-size:18px; color:{ACCENT};">FitBot</strong>
-        <button onclick="document.getElementById('drawer').classList.remove('open');">✖</button>
-      </div>
-      <div style="margin-top:12px;">
-        <form method="get">
-          <button name="nav" value="Chat" class="drawer-item">🏠 Chat</button>
-          <button name="nav" value="History" class="drawer-item">📜 History</button>
-          <button name="nav" value="Challenges" class="drawer-item">🎯 Challenges</button>
-          <button name="nav" value="Progress" class="drawer-item">🏆 Progress</button>
-          <button name="nav" value="Profile" class="drawer-item">⚙️ Profile</button>
-        </form>
-      </div>
-    </div>
-    <div class="bottom-nav">
-      <form method="get" style="text-align:center;">
-        <button name="nav" value="Chat" class="btn-nav {'active' if st.session_state.page=='Chat' else ''}">🏠 Chat</button>
-        <button name="nav" value="History" class="btn-nav {'active' if st.session_state.page=='History' else ''}">📜 History</button>
-        <button name="nav" value="Challenges" class="btn-nav {'active' if st.session_state.page=='Challenges' else ''}">🎯 Challenges</button>
-        <button name="nav" value="Progress" class="btn-nav {'active' if st.session_state.page=='Progress' else ''}">🏆 Progress</button>
-        <button name="nav" value="Profile" class="btn-nav {'active' if st.session_state.page=='Profile' else ''}">⚙️ Profile</button>
-      </form>
-    </div>
-    """, unsafe_allow_html=True)
+# ---------- Navigation (Mobile Drawer + Desktop Bottom Bar) ----------
+def render_mobile_drawer():
+    """Top-left ☰ button toggles drawer (pure Streamlit, no query params)."""
+    # Hamburger (visible on mobile via CSS below)
+    ham_col = st.columns([0.15, 0.85])[0]
+    if ham_col.button("☰ Menu", key="hamburger_btn"):
+        st.session_state.drawer_open = True
 
-    # Read nav param (works both desktop & drawer) and update page
-    nav_target = st.query_params.get("nav")
-    if nav_target:
-        # prevent unintended jumps; only switch if user clicked
-        st.session_state.page = nav_target
-        # close drawer via small JS
-        st.markdown("<script>const d=document.getElementById('drawer'); if(d){d.classList.remove('open');}</script>", unsafe_allow_html=True)
-        # clear param so back button doesn't keep firing
-        st.query_params.clear()
-        st.rerun()
+    if st.session_state.drawer_open:
+        st.markdown(
+            """
+            <style>
+              .drawer-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.35); }
+              .drawer-panel   { position: fixed; top:0; left:0; bottom:0; width: 76%;
+                                max-width: 300px; background: #fff; z-index: 1001;
+                                box-shadow: 2px 0 20px rgba(0,0,0,0.15); padding: 16px; }
+              @media (min-width: 769px) { .mobile-only { display:none; } }
+              @media (max-width: 768px) { .desktop-only { display:none; } }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="drawer-overlay"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="drawer-panel">', unsafe_allow_html=True)
+        col_a, col_b = st.columns([0.7, 0.3])
+        with col_a:
+            st.markdown(f"### <span style='color:{ACCENT}'>FitBot</span>", unsafe_allow_html=True)
+        with col_b:
+            if st.button("✖ Close"):
+                st.session_state.drawer_open = False
+                st.rerun()
 
-# -----------------------------
-# FAQ
-# -----------------------------
+        st.markdown("---")
+        # Drawer nav buttons
+        if st.button("🏠 Chat", use_container_width=True):
+            st.session_state.page = "Chat"; st.session_state.drawer_open = False; st.rerun()
+        if st.button("📜 History", use_container_width=True):
+            st.session_state.page = "History"; st.session_state.drawer_open = False; st.rerun()
+        if st.button("🎯 Challenges", use_container_width=True):
+            st.session_state.page = "Challenges"; st.session_state.drawer_open = False; st.rerun()
+        if st.button("🏆 Progress", use_container_width=True):
+            st.session_state.page = "Progress"; st.session_state.drawer_open = False; st.rerun()
+        if st.button("⚙️ Profile", use_container_width=True):
+            st.session_state.page = "Profile"; st.session_state.drawer_open = False; st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+def render_bottom_nav():
+    """Desktop bottom nav bar — emoji buttons."""
+    st.markdown(
+        f"""
+        <style>
+          @media (max-width:768px) {{ .bottom-nav {{ display:none; }} }}
+          .bottom-nav {{
+            position: fixed; bottom: 0; left: 0; right: 0; z-index: 999;
+            background: rgba(255,255,255,0.9);
+            backdrop-filter: blur(6px);
+            border-top: 1px solid rgba(0,0,0,0.08);
+            padding: 6px 10px;
+          }}
+          .nav-btn {{
+            width: 100%; padding: 10px 0; border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.08); background: white;
+            font-weight: 700; color: #111;
+          }}
+          .nav-active {{ border-color: {ACCENT}; color: {ACCENT}; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container():
+        st.markdown('<div class="bottom-nav">', unsafe_allow_html=True)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        if c1.button("🏠 Chat", key="nav_chat"):
+            st.session_state.page = "Chat"; st.rerun()
+        if c2.button("📜 History", key="nav_history"):
+            st.session_state.page = "History"; st.rerun()
+        if c3.button("🎯 Challenges", key="nav_challenges"):
+            st.session_state.page = "Challenges"; st.rerun()
+        if c4.button("🏆 Progress", key="nav_progress"):
+            st.session_state.page = "Progress"; st.rerun()
+        if c5.button("⚙️ Profile", key="nav_profile"):
+            st.session_state.page = "Profile"; st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------- FAQ ----------
 FAQ_QUERIES = {
     "🏋️ 3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
     "🥗 Post-Workout Meal": "What should I eat after my workout for recovery?",
@@ -170,16 +168,13 @@ FAQ_QUERIES = {
     "🧘 Quick Yoga": "Give a 10-minute morning yoga stretch routine.",
     "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout.",
 }
-
 def faq_key(i: int, label: str) -> str:
     return f"faq_{st.session_state.session_id}_{i}_{label.replace(' ','_')}"
 
-# -----------------------------
-# Pages
-# -----------------------------
+# ---------- Pages ----------
 def page_profile():
     st.title("🏋️ Create Your Fitness Profile")
-    st.markdown("Let’s personalize FitBot for you. (No sidebars here; clean start.)")
+    st.markdown("Let’s personalize FitBot for you. (Clean start — no sidebars here.)")
 
     with st.form("profile_form"):
         name = st.text_input("Name", st.session_state.profile.get("name", ""))
@@ -195,41 +190,46 @@ def page_profile():
             "name": name, "age": age, "weight": weight,
             "goal": goal, "level": level, "diet": diet,
         })
+        st.session_state.profile_completed = True
         update_daily_login(silent=True)
         save_all_state()
-        # Tip of the Day — show ONCE after profile submit (Option A)
+        # Tip of the Day — show ONCE after profile submit
         st.session_state.tip_after_profile = random.choice([
             "Consistency beats intensity — train smart and steady.",
             "Fuel your body well and your workouts will follow.",
             "Recovery is training — sleep, hydrate, stretch.",
         ])
         st.success("✅ Profile saved. Launching FitBot...")
-        time.sleep(0.7)
+        time.sleep(0.6)
         st.session_state.page = "Chat"
         st.rerun()
 
 def page_chat():
-    st.title("💬 Chat — FitBot")
+    # Mobile drawer button (hidden on desktop via CSS)
+    render_mobile_drawer()
 
-    # One-time “Tip of the Day” after profile
+    st.title("💬 Chat — FitBot")
+    # One-time tip after profile submit
     if st.session_state.tip_after_profile:
         st.info(f"💡 Tip of the Day: {st.session_state.tip_after_profile}")
         st.session_state.tip_after_profile = None
 
     st.markdown("Ask me anything about workouts, diet, or motivation.")
 
-    # FAQ buttons (always work; unique keys)
+    # FAQ buttons (unique keys; always respond)
     cols = st.columns(3)
-    for i, (label, q) in enumerate(list(FAQ_QUERIES.items())[:6]):
+    for i, (label, q) in enumerate(list(FAQ_QUERIES.items())):
         if cols[i % 3].button(label, key=faq_key(i, label)):
-            run_query(q)
+            run_query(q)  # call directly; do not persist FAQ in state
 
-    # Chat input
+    # Chat input — ensure FAQ memory never overrides typed question
     user_q = st.chat_input("Ask FitBot your question:")
     if user_q:
+        if "selected_faq" in st.session_state:
+            st.session_state.pop("selected_faq")
         run_query(user_q)
 
-    # Recent
+    # Recent Q&A
     st.markdown("### Recent Q&A")
     if not st.session_state.history:
         st.info("No chats yet.")
@@ -238,8 +238,12 @@ def page_chat():
             with st.expander(f"Q: {turn['user'][:72]}"):
                 st.markdown(f"**A:** {turn['assistant']}")
 
+    # Desktop bottom nav (fixed)
+    render_bottom_nav()
+
 def run_query(query: str):
-    # Rotating motivational tip while loading (fades in/out)
+    """Answer a query with rotating loading tips; log to history; update gamification."""
+    # Loading box with rotating tips
     tips = [
         "Small steps daily lead to big wins.",
         "Hydration powers your performance.",
@@ -281,32 +285,35 @@ def run_query(query: str):
         pass
     st.success(answer)
 
+    # Keep bottom nav visible after answering on desktop
+    render_bottom_nav()
+
 def page_history():
+    render_mobile_drawer()
     st.title("📜 History")
     if not st.session_state.history:
         st.info("No chats yet.")
-        return
-    for i, t in enumerate(reversed(st.session_state.history[-50:])):
-        with st.expander(f"Q {i+1}: {t['user'][:70]}"):
-            st.markdown(f"**Q:** {t['user']}")
-            st.markdown(f"**A:** {t['assistant']}")
-            st.caption(f"Time: {t.get('time')}s")
+    else:
+        for i, t in enumerate(reversed(st.session_state.history[-50:])):
+            with st.expander(f"Q {i+1}: {t['user'][:70]}"):
+                st.markdown(f"**Q:** {t['user']}")
+                st.markdown(f"**A:** {t['assistant']}")
+                st.caption(f"Time: {t.get('time')}s")
+    render_bottom_nav()
 
 def page_challenges():
+    render_mobile_drawer()
     st.title("🎯 Challenges")
     render_progress_sidebar_full()
     render_weekly_challenge_section()
+
     st.markdown("---")
     st.markdown("Manual actions (log to progress challenges):")
     c1, c2, c3 = st.columns(3)
     if c1.button("Log: Completed a workout (manual)"):
-        update_challenge_progress("manual")
-        save_all_state()
-        st.success("Workout logged — progress updated.")
+        update_challenge_progress("manual"); save_all_state(); st.success("Workout logged — progress updated.")
     if c2.button("Log: Did a check-in (manual)"):
-        update_challenge_progress("login")
-        save_all_state()
-        st.success("Check-in logged — progress updated.")
+        update_challenge_progress("login"); save_all_state(); st.success("Check-in logged — progress updated.")
     if c3.button("Claim weekly reward"):
         gam = st.session_state.gamification
         if gam.get("challenge_completed"):
@@ -314,7 +321,10 @@ def page_challenges():
         else:
             st.info("Challenge not complete yet.")
 
+    render_bottom_nav()
+
 def page_progress():
+    render_mobile_drawer()
     st.title("🏆 Progress")
     render_progress_sidebar_full()
     st.markdown("### Badges")
@@ -323,16 +333,15 @@ def page_progress():
         st.info("No badges yet.")
     else:
         st.write(", ".join(badges))
+    render_bottom_nav()
 
-# -----------------------------
-# Main
-# -----------------------------
+# ---------- Main ----------
 def main():
-    # Render nav (hidden drawer on mobile, bottom bar on desktop)
-    if st.session_state.page != "Profile":
-        nav_render()
+    # If page is Profile but user already completed it, keep them on Chat unless they explicitly go to Profile
+    if st.session_state.page == "Profile" and st.session_state.profile_completed:
+        # do nothing (they intentionally chose Profile) — leave as is
+        pass
 
-    # Route
     page = st.session_state.page
     if page == "Profile":
         page_profile()
@@ -345,6 +354,7 @@ def main():
     elif page == "Progress":
         page_progress()
     else:
+        st.session_state.page = "Chat"
         page_chat()
 
 if __name__ == "__main__":
