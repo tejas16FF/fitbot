@@ -1,8 +1,8 @@
 streamlit>=1.24
 python-dotenv
-langchain-community
 sentence-transformers
-numpy
 faiss-cpu
-openai
-langchain-google-genai==2.0.10   # check compat and pin only if you need Gemini
+numpy
+google-generativeai
+protobuf>=3.20,<5
+requests
