@@ -1,8 +1,8 @@
-# gamification.py — Expanded Gamification + Achievements (lightweight, no heavy deps)
+# gamification.py — Expanded Gamification + Achievements (memory-only)
 import streamlit as st
 import time
 import random
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 # -----------------------------
 # State Initialization
@@ -34,7 +34,7 @@ def init_gamification(profile=None):
     if "motivation_queries" not in st.session_state:
         st.session_state.motivation_queries = 0
 
-    # Optionally update streak on first load after profile is set
+    # Update streak (once per day when profile is available)
     if profile and profile.get("name"):
         update_daily_streak()
 
@@ -82,7 +82,7 @@ def update_daily_streak():
     else:
         st.session_state.streak = 1
     st.session_state.last_login = today.isoformat()
-    gain_xp(25)  # small XP for daily open
+    gain_xp(25)  # small XP for opening the app today
 
 # -----------------------------
 # Weekly Challenges
@@ -94,6 +94,8 @@ WEEKLY_CHALLENGES = [
     {"id":"hiit_15","name":"15-minute HIIT session","xp":100},
     {"id":"clean_24h","name":"Eat clean (no junk) for 24 hours","xp":100},
     {"id":"stretch_10","name":"Stretch for 10 minutes before bed","xp":100},
+    {"id":"walk_5k","name":"Walk 5,000 steps today","xp":100},
+    {"id":"core_10","name":"10-minute core workout","xp":100},
 ]
 
 def _pick_uncompleted_challenge():
@@ -117,10 +119,8 @@ def render_challenges_page(profile=None):
     init_gamification(profile)
     st.title("🎯 Weekly Fitness Challenges")
 
-    # Progress Summary
     _render_progress_summary()
 
-    # Assign active if none
     if st.session_state.active_challenge is None:
         next_ch = _pick_uncompleted_challenge()
         if next_ch:
@@ -137,7 +137,6 @@ def render_challenges_page(profile=None):
     else:
         st.success("🎉 No active challenge. You’ve completed all available ones!")
 
-    # Completed list
     if st.session_state.completed_challenges:
         st.markdown("---")
         st.subheader("✅ Completed")
@@ -151,56 +150,45 @@ def render_challenges_page(profile=None):
 # -----------------------------
 # Rarity: common / rare / epic / legendary
 ACHIEVEMENTS = [
-    {
-        "id":"first_xp","name":"🔥 First Steps","desc":"Earn your first XP",
-        "rarity":"common","emoji":"🟢","xp_reward":10,
-        "condition":lambda s,p: s["xp"]>=1
-    },
-    {
-        "id":"level_2","name":"⚡ Level 2 Achieved","desc":"Reach Level 2",
-        "rarity":"rare","emoji":"🔵","xp_reward":25,
-        "condition":lambda s,p: s["level"]>=2
-    },
-    {
-        "id":"level_3","name":"🏋️ Power Level","desc":"Reach Level 3",
-        "rarity":"epic","emoji":"🟣","xp_reward":50,
-        "condition":lambda s,p: s["level"]>=3
-    },
-    {
-        "id":"challenge_1","name":"✅ Challenger","desc":"Complete your first challenge",
-        "rarity":"rare","emoji":"🔵","xp_reward":25,
-        "condition":lambda s,p: len(s["completed_challenges"])>=1
-    },
-    {
-        "id":"challenge_3","name":"🔥 Consistency King","desc":"Complete 3 challenges",
-        "rarity":"epic","emoji":"🟣","xp_reward":50,
-        "condition":lambda s,p: len(s["completed_challenges"])>=3
-    },
-    {
-        "id":"iron_will_7","name":"🛡️ Week Warrior","desc":"7-day streak",
-        "rarity":"epic","emoji":"🟣","xp_reward":50,
-        "condition":lambda s,p: s.get("streak",0)>=7
-    },
-    {
-        "id":"iron_will_30","name":"🔥 Iron Will","desc":"30-day streak",
-        "rarity":"legendary","emoji":"🟠","xp_reward":100,
-        "condition":lambda s,p: s.get("streak",0)>=30
-    },
-    {
-        "id":"goal_muscle","name":"💪 Muscle Ambition","desc":"Set goal: Muscle gain",
-        "rarity":"common","emoji":"🟢","xp_reward":10,
-        "condition":lambda s,p: (p or {}).get("goal")=="Muscle gain"
-    },
-    {
-        "id":"goal_weight","name":"🔥 Fat Burner","desc":"Set goal: Weight loss",
-        "rarity":"common","emoji":"🟢","xp_reward":10,
-        "condition":lambda s,p: (p or {}).get("goal")=="Weight loss"
-    },
-    {
-        "id":"nutrition_5","name":"🥗 Nutrition Ninja","desc":"Ask 5 diet/nutrition questions",
-        "rarity":"rare","emoji":"🔵","xp_reward":25,
-        "condition":lambda s,p: s.get("nutrition_queries",0)>=5
-    },
+    {"id":"first_xp","name":"🔥 First Steps","desc":"Earn your first XP",
+     "rarity":"common","emoji":"🟢","xp_reward":10,
+     "condition":lambda s,p: s["xp"]>=1},
+
+    {"id":"level_2","name":"⚡ Level 2 Achieved","desc":"Reach Level 2",
+     "rarity":"rare","emoji":"🔵","xp_reward":25,
+     "condition":lambda s,p: s["level"]>=2},
+
+    {"id":"level_3","name":"🏋️ Power Level","desc":"Reach Level 3",
+     "rarity":"epic","emoji":"🟣","xp_reward":50,
+     "condition":lambda s,p: s["level"]>=3},
+
+    {"id":"challenge_1","name":"✅ Challenger","desc":"Complete your first challenge",
+     "rarity":"rare","emoji":"🔵","xp_reward":25,
+     "condition":lambda s,p: len(s["completed_challenges"])>=1},
+
+    {"id":"challenge_3","name":"🔥 Consistency King","desc":"Complete 3 challenges",
+     "rarity":"epic","emoji":"🟣","xp_reward":50,
+     "condition":lambda s,p: len(s["completed_challenges"])>=3},
+
+    {"id":"iron_will_7","name":"🛡️ Week Warrior","desc":"7-day streak",
+     "rarity":"epic","emoji":"🟣","xp_reward":50,
+     "condition":lambda s,p: s.get("streak",0)>=7},
+
+    {"id":"iron_will_30","name":"🔥 Iron Will","desc":"30-day streak",
+     "rarity":"legendary","emoji":"🟠","xp_reward":100,
+     "condition":lambda s,p: s.get("streak",0)>=30},
+
+    {"id":"goal_muscle","name":"💪 Muscle Ambition","desc":"Set goal: Muscle gain",
+     "rarity":"common","emoji":"🟢","xp_reward":10,
+     "condition":lambda s,p: (p or {}).get("goal")=="Muscle gain"},
+
+    {"id":"goal_weight","name":"🔥 Fat Burner","desc":"Set goal: Weight loss",
+     "rarity":"common","emoji":"🟢","xp_reward":10,
+     "condition":lambda s,p: (p or {}).get("goal")=="Weight loss"},
+
+    {"id":"nutrition_5","name":"🥗 Nutrition Ninja","desc":"Ask 5 diet/nutrition questions",
+     "rarity":"rare","emoji":"🔵","xp_reward":25,
+     "condition":lambda s,p: s.get("nutrition_queries",0)>=5},
 ]
 
 def check_all_achievements(profile=None):
@@ -225,9 +213,7 @@ def check_all_achievements(profile=None):
 
 def _unlock_achievement(ach):
     st.session_state.unlocked_achievements.append(ach["id"])
-    # reward small extra XP on unlock
     st.session_state.xp += ach.get("xp_reward", 0)
-    # animated toast
     _achievement_toast(ach)
 
 def render_achievements_page(profile=None):
@@ -312,7 +298,6 @@ def _toast(message: str, duration_ms: int = 2600):
     st.markdown(html, unsafe_allow_html=True); time.sleep(0.05)
 
 def _achievement_toast(ach):
-    # Gradient color by rarity
     colors = {
         "common":"linear-gradient(135deg,#43e97b,#38f9d7)",
         "rare":"linear-gradient(135deg,#00c6ff,#0072ff)",
