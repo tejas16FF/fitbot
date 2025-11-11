@@ -1,46 +1,135 @@
+# ==========================
+# FitBot — Final Stable Version (Gemini-1.5-Pro + HuggingFace + FAISS)
+# ==========================
+
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
 import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
+import numpy as np
+import faiss
 
+# Gamification Imports
 from gamification import (
     initialize_gamification,
     update_daily_login,
     reward_for_chat,
     update_challenge_progress,
+    render_progress_sidebar_full,
+    render_weekly_challenge_section,
     show_challenge_popup,
-    save_all_state,
+    save_all_state
 )
 
-# -----------------------------
-# Basic Setup
-# -----------------------------
-load_dotenv()
+# ---------------------------------------------
+# Hide default Streamlit UI
+# ---------------------------------------------
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
-
-# Hide Streamlit menu, footer, and default nav
 st.markdown("""
 <style>
-#MainMenu {visibility:hidden;}
-footer {visibility:hidden;}
-header {visibility:hidden;}
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 ACCENT = "#0FB38B"
-GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 
-if GOOGLE_KEY:
-    genai.configure(api_key=GOOGLE_KEY)
+# ---------------------------------------------
+# ENV + Gemini setup
+# ---------------------------------------------
+load_dotenv()
+GEMINI_KEY = os.getenv("GOOGLE_API_KEY")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
 
-# -----------------------------
-# Session State
-# -----------------------------
+# ---------------------------------------------
+# Knowledge Base + Embeddings
+# ---------------------------------------------
+DATA_FILE = "data.txt"
+
+@st.cache_resource
+def load_kb():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+KB_TEXT = load_kb()
+
+# Load embedding model once
+@st.cache_resource
+def load_embedder():
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+embedder = load_embedder()
+
+# Build FAISS index once
+@st.cache_resource
+def build_faiss_kb(kb_text):
+    docs = [x.strip() for x in kb_text.split("\n") if x.strip()]
+    vectors = embedder.encode(docs, convert_to_numpy=True)
+    dims = vectors.shape[1]
+    index = faiss.IndexFlatL2(dims)
+    index.add(vectors)
+    return docs, index
+
+KB_DOCS, KB_INDEX = build_faiss_kb(KB_TEXT)
+
+def retrieve_relevant_context(query):
+    if not KB_DOCS:
+        return ""
+    q_vec = embedder.encode([query], convert_to_numpy=True)
+    D, I = KB_INDEX.search(q_vec, 3)
+    chunks = [KB_DOCS[idx] for idx in I[0] if idx < len(KB_DOCS)]
+    return "\n".join(chunks)
+
+# ---------------------------------------------
+# Gemini LLM
+# ---------------------------------------------
+def ask_gemini(query, context):
+    try:
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            generation_config={
+                "max_output_tokens": 600,
+                "temperature": 0.65,
+                "top_p": 0.9,
+                "top_k": 40
+            },
+            safety_settings="block_none"
+        )
+        prompt = f"""
+You are FitBot, a professional fitness coach.
+
+Use the context to answer the user's question, but DO NOT repeat the context.
+Be accurate, clear, and motivating. Avoid generic answers.
+
+CONTEXT:
+{context}
+
+QUESTION:
+{query}
+
+FINAL ANSWER:
+"""
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"⚠️ Gemini error: {e}"
+
+# ---------------------------------------------
+# Session State Initialization
+# ---------------------------------------------
+if "page" not in st.session_state:
+    st.session_state.page = "Profile"
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
 if "profile" not in st.session_state:
     st.session_state.profile = {
         "name": "",
@@ -48,292 +137,171 @@ if "profile" not in st.session_state:
         "weight": 70,
         "goal": "General fitness",
         "level": "Beginner",
-        "diet": "No preference",
+        "diet": "No preference"
     }
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "page" not in st.session_state:
-    st.session_state.page = "Profile"
-
-if "session_id" not in st.session_state:
-    st.session_state.session_id = random.randint(100000, 999999)
-
-if "tip_after_profile" not in st.session_state:
-    st.session_state.tip_after_profile = None
 
 initialize_gamification()
 
-# -----------------------------
-# Navigation Bar (TOP CENTER)
-# -----------------------------
-def render_top_nav():
+# ---------------------------------------------
+# UI — Navigation Bar (top center)
+# ---------------------------------------------
+def navigation_bar():
     st.markdown(f"""
     <style>
-      .nav-container {{
-        position: fixed;
-        top: 0;
-        left: 0; right: 0;
-        z-index: 1000;
+    .nav-container {{
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        margin-bottom: 20px;
+        margin-top: 10px;
+    }}
+    .nav-btn {{
         background: white;
-        border-bottom: 1px solid rgba(0,0,0,0.1);
-        padding: 10px 5px;
-        text-align: center;
-      }}
-      .nav-btn {{
-        display: inline-block;
-        margin: 0 8px;
-        padding: 10px 15px;
+        padding: 10px 20px;
         border-radius: 10px;
-        border: 1px solid rgba(0,0,0,0.08);
+        border: 2px solid #ddd;
         font-weight: 600;
         cursor: pointer;
-        background: white;
-      }}
-      .active-nav {{
+    }}
+    .nav-active {{
+        border-color: {ACCENT};
         color: {ACCENT};
-        border: 1px solid {ACCENT};
-      }}
+        font-weight: 800;
+    }}
     </style>
-
-    <div class="nav-container">
-      <form method="get">
-        <button name="nav" value="Chat" class="nav-btn {'active-nav' if st.session_state.page=='Chat' else ''}">🏠 Chat</button>
-        <button name="nav" value="History" class="nav-btn {'active-nav' if st.session_state.page=='History' else ''}">📜 History</button>
-        <button name="nav" value="Challenges" class="nav-btn {'active-nav' if st.session_state.page=='Challenges' else ''}">🎯 Challenges</button>
-        <button name="nav" value="Progress" class="nav-btn {'active-nav' if st.session_state.page=='Progress' else ''}">🏆 Progress</button>
-        <button name="nav" value="Profile" class="nav-btn {'active-nav' if st.session_state.page=='Profile' else ''}">⚙️ Profile</button>
-      </form>
-    </div>
-
-    <div style="height:70px;"></div>
     """, unsafe_allow_html=True)
 
-    nav_target = st.query_params.get("nav")
-    if nav_target:
-        st.session_state.page = nav_target
-        st.query_params.clear()
-        st.rerun()
+    cols = st.columns(5)
+    buttons = ["Chat", "History", "Challenges", "Progress", "Profile"]
 
-# -----------------------------
-# Build local embedding store
-# -----------------------------
-EMBED_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+    for i, label in enumerate(buttons):
+        active = "nav-active" if st.session_state.page == label else ""
+        if cols[i].button(f"{label}", key=f"nav_{label}"):
+            st.session_state.page = label
+            st.rerun()
 
-DATA_FILE = "data.txt"
-def load_kb():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return f.read()
-    return "Fitness basics: workout consistently, eat healthy, hydrate, sleep well."
-
-KB_TEXT = load_kb()
-
-def build_embeddings():
-    docs = [p.strip() for p in KB_TEXT.split("\n\n") if p.strip()]
-    emb = EMBED_MODEL.encode(docs)
-    index = faiss.IndexFlatL2(emb.shape[1])
-    index.add(np.array(emb))
-    return docs, index
-
-DOCS, FAISS_INDEX = build_embeddings()
-
-def kb_search(query):
-    v = EMBED_MODEL.encode([query])
-    D, I = FAISS_INDEX.search(np.array(v), 1)
-    return DOCS[I[0][0]]
-
-# -----------------------------
-# Gemini Query
-# -----------------------------
-def ask_gemini(query, fallback_text):
-    model = genai.GenerativeModel("gemini-pro")
-    prompt = f"""
-You are FitBot. Use this knowledge context only to enhance accuracy:
-----
-{fallback_text}
-----
-User question: {query}
-Provide a detailed helpful fitness answer.
-"""
-    resp = model.generate_content(prompt)
-    return resp.text
-
-
-# -----------------------------
-# FAQ Buttons
-# -----------------------------
-FAQ_QUESTIONS = {
-    "🏋️ Beginner plan": "Give me a 3 day beginner workout plan",
-    "🔥 Fat loss": "How can I lose fat safely?",
-    "🥗 Diet tips": "Give me healthy diet suggestions",
-    "💪 Muscle gain": "How do I build muscle effectively?",
-    "🍽️ Veg protein": "High protein vegetarian food?",
-    "⌛ Warmups": "Give me dynamic warmup routine",
+# ---------------------------------------------
+# FAQ
+# ---------------------------------------------
+FAQ = {
+    "🏋️ 3-Day Plan": "Create a 3-day beginner workout plan.",
+    "🥗 Post-workout": "What should I eat after workout?",
+    "💪 Veg Protein": "List vegetarian high-protein foods.",
+    "🔥 Burn Fat": "How to reduce body fat safely?",
+    "🧘 Morning Stretch": "Give a 10-minute yoga stretch.",
+    "🚶 Warm-up": "Suggest warm-up exercises."
 }
 
-def faq_key(i, label):
-    return f"faq_{st.session_state.session_id}_{i}"
-
-# -----------------------------
-# Profile Page
-# -----------------------------
-def page_profile():
-    st.title("🏋️ Create Your Fitness Profile")
-
-    with st.form("profile_form"):
-        name = st.text_input("Name", st.session_state.profile["name"])
-        age = st.number_input("Age", 10, 80, st.session_state.profile["age"])
-        weight = st.number_input("Weight (kg)", 30, 200, st.session_state.profile["weight"])
-        goal = st.selectbox("Goal", ["General fitness", "Weight loss", "Muscle gain", "Endurance"])
-        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
-        diet = st.selectbox("Diet", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
-
-        ok = st.form_submit_button("Save & Continue")
-
-    if ok:
-        st.session_state.profile.update({
-            "name": name, "age": age, "weight": weight,
-            "goal": goal, "level": level, "diet": diet
-        })
-        update_daily_login(silent=True)
-        st.session_state.tip_after_profile = random.choice([
-            "Consistency beats intensity — train smart and steady.",
-            "Hydrate well, your body depends on it.",
-            "Recovery is part of training.",
-        ])
-        st.session_state.page = "Chat"
-        st.rerun()
-
-# -----------------------------
-# Chat Page
-# -----------------------------
-def page_chat():
-    st.title("💬 Chat with FitBot")
-
-    # Tip only once
-    if st.session_state.tip_after_profile:
-        st.info(f"💡 {st.session_state.tip_after_profile}")
-        st.session_state.tip_after_profile = None
-
-    # FAQ Buttons
-    cols = st.columns(3)
-    faq_list = list(FAQ_QUESTIONS.items())
-    for i, (label, q) in enumerate(faq_list):
-        if cols[i % 3].button(label, key=faq_key(i, label)):
-            answer_query(q)
-
-    # Manual Query
-    user_q = st.chat_input("Ask me anything...")
-    if user_q:
-        answer_query(user_q)
-
-    st.markdown("### Recent Questions")
-    for item in st.session_state.history[-8:][::-1]:
-        st.caption(f"**Q:** {item['user']}")
-        st.write(item["assistant"])
-        st.write("---")
-
-# -----------------------------
-# Answer Query
-# -----------------------------
+# ---------------------------------------------
+# Chat Logic
+# ---------------------------------------------
 def answer_query(query):
-    # Show rotating motivational tip (patched)
-    html = """
-    <div id="motibox" style="text-align:center; margin:10px 0; padding:10px; border-radius:10px;
-         color:#0FB38B; background:rgba(15,179,139,.06); font-weight:700; transition:opacity .5s;">
-      💭 Thinking...
-    </div>
-
-    <script>
-      const tips = ["Small steps daily lead to big wins.",
-                    "Hydration powers your performance.",
-                    "Form first, then intensity.",
-                    "Recovery fuels growth.",
-                    "Discipline > motivation. Show up."];
-      let idx = 0;
-      const box = document.getElementById("motibox");
-      function nxt() {
-        box.style.opacity = 0;
-        setTimeout(function() {
-          box.innerHTML = "💭 " + tips[idx];
-          box.style.opacity = 1;
-          idx = (idx + 1) % tips.length;
-        }, 350);
-      }
-      const t = setInterval(nxt, 3000);
-      setTimeout(function(){ clearInterval(t); }, 9000);
-    </script>
-    """
-    ph = st.empty()
-    ph.markdown(html, unsafe_allow_html=True)
-
-    kb_context = kb_search(query)
-    answer = ask_gemini(query, kb_context)
-
-    ph.empty()
+    context = retrieve_relevant_context(query)
+    answer = ask_gemini(query, context)
 
     st.session_state.history.append({
         "user": query,
         "assistant": answer,
-        "time": round(random.uniform(0.2, 1.2), 2)
+        "time": round(time.time(), 2)
     })
-    reward_for_chat(False)
+
+    reward_for_chat(show_msg=False)
     update_challenge_progress("chat")
     save_all_state()
 
     st.success(answer)
 
-# -----------------------------
-# History
-# -----------------------------
+# ---------------------------------------------
+# PAGES
+# ---------------------------------------------
+def page_profile():
+    st.title("🏋️ Your Fitness Profile")
+
+    with st.form("profile_form"):
+        name = st.text_input("Name", st.session_state.profile["name"])
+        age = st.number_input("Age", 10, 80, st.session_state.profile["age"])
+        weight = st.number_input("Weight (kg)", 30, 250, st.session_state.profile["weight"])
+        goal = st.selectbox("Goal", ["General fitness", "Weight loss", "Muscle gain", "Endurance"])
+        level = st.selectbox("Experience", ["Beginner", "Intermediate", "Advanced"])
+        diet = st.selectbox("Diet", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
+        submit = st.form_submit_button("Save & Continue")
+
+    if submit:
+        st.session_state.profile.update({
+            "name": name,
+            "age": age,
+            "weight": weight,
+            "goal": goal,
+            "level": level,
+            "diet": diet
+        })
+        update_daily_login(silent=True)
+        save_all_state()
+        st.session_state.page = "Chat"
+        st.rerun()
+
+def page_chat():
+    navigation_bar()
+    st.title("💬 Chat with FitBot")
+
+    cols = st.columns(3)
+    faq_list = list(FAQ.items())
+
+    for i in range(len(faq_list)):
+        label, q = faq_list[i]
+        if cols[i % 3].button(label, key=f"faq_{i}"):
+            answer_query(q)
+
+    user_q = st.chat_input("Ask anything about fitness, nutrition or workouts:")
+    if user_q:
+        answer_query(user_q)
+
+    st.write("### Recent Conversations")
+    for turn in reversed(st.session_state.history[-6:]):
+        with st.expander(f"{turn['user']}"):
+            st.write(turn["assistant"])
+
 def page_history():
+    navigation_bar()
     st.title("📜 History")
+
     if not st.session_state.history:
-        st.info("No past questions yet.")
+        st.info("No history yet.")
         return
 
-    for item in st.session_state.history[::-1]:
-        with st.expander(f"Q: {item['user'][:50]}"):
-            st.write(item["assistant"])
+    for turn in reversed(st.session_state.history):
+        with st.expander(turn["user"]):
+            st.write(turn["assistant"])
 
-# -----------------------------
-# Challenges
-# -----------------------------
 def page_challenges():
+    navigation_bar()
     st.title("🎯 Weekly Challenges")
-    from gamification import (
-        render_progress_sidebar_full, render_weekly_challenge_section
-    )
     render_progress_sidebar_full()
     render_weekly_challenge_section()
 
-# -----------------------------
-# Progress Page
-# -----------------------------
 def page_progress():
-    st.title("🏆 Progress Report")
-    from gamification import render_progress_sidebar_full
+    navigation_bar()
+    st.title("🏆 Your Progress")
     render_progress_sidebar_full()
 
-# -----------------------------
-# Main Routing
-# -----------------------------
+# ---------------------------------------------
+# MAIN
+# ---------------------------------------------
 def main():
-    if st.session_state.page != "Profile":
-        render_top_nav()
+    page = st.session_state.page
 
-    if st.session_state.page == "Profile":
+    if page == "Profile":
         page_profile()
-    elif st.session_state.page == "Chat":
+    elif page == "Chat":
         page_chat()
-    elif st.session_state.page == "History":
+    elif page == "History":
         page_history()
-    elif st.session_state.page == "Challenges":
+    elif page == "Challenges":
         page_challenges()
-    elif st.session_state.page == "Progress":
+    elif page == "Progress":
         page_progress()
+    else:
+        page_chat()
 
 if __name__ == "__main__":
     main()
