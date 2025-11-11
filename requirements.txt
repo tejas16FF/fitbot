@@ -1,18 +1,9 @@
-streamlit==1.30.0
+streamlit==1.32.0
 python-dotenv==1.0.1
 
-# LangChain stack (fully compatible)
 langchain==0.1.20
 langchain-community==0.0.38
-langchain-text-splitters==0.0.1
-
-# Google Gemini LLM 
 langchain-google-genai==1.0.3
 google-generativeai==0.5.2
 
-# Embeddings + Vector DB
-sentence-transformers==2.2.2
-faiss-cpu==1.12.0
-
-# UI Enhancements & Charts
-plotly==5.18.0
+chromadb==0.4.22
