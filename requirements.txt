@@ -1,31 +1,14 @@
-# --- Core dependencies ---
-streamlit==1.34.0
+streamlit==1.30.0
 python-dotenv==1.0.1
 
-# --- Google Gemini / Generative AI ---
-google-generativeai==0.5.2
-langchain-google-genai==1.0.3  # must match google-generativeai <0.6.0
-
-# --- LangChain (compatible versions) ---
 langchain==0.1.20
-langchain-community==0.1.20
-langchain-core==0.2.27
-langchain-text-splitters==0.2.0
+langchain-community==0.0.35
+langchain-text-splitters==0.0.1
 
-# --- Embeddings (HuggingFace) ---
+langchain-google-genai==1.0.3
+google-generativeai==0.5.2
+
 sentence-transformers==2.2.2
-transformers==4.39.3
-accelerate==0.28.0
-huggingface-hub==0.22.2
-
-# --- FAISS (CPU version) ---
 faiss-cpu==1.7.4
 
-# --- Utilities ---
-numpy==1.26.4
-pydantic==2.6.3
-pydantic-core==2.16.3
-
-# --- Optional safety/fixes ---
-protobuf==4.25.3
-grpcio==1.62.1
+plotly==5.18.0
