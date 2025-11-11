@@ -1,23 +1,20 @@
-# app.py — FitBot with local embeddings (SentenceTransformer) + Chroma + Gemini LLM
-# Includes: Pro UI, Top Navbar, FAQ buttons, Achievements + Challenges (modular)
+# app.py — FitBot (Option B: memory-only, TF-IDF retriever) + Gemini + Gamification
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
-from typing import List, Dict, Any
 
-# LangChain bits
-from langchain.text_splitter import CharacterTextSplitter
+# LLM (LangChain wrapper for Gemini)
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
-from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-# Local embeddings (lightweight)
-from sentence_transformers import SentenceTransformer
+# Lightweight TF-IDF retriever
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
-# Gamification
+# Gamification layer
 from gamification import (
     init_gamification, update_daily_streak, gain_xp,
     render_challenges_page, render_achievements_page,
@@ -81,31 +78,54 @@ if "history" not in st.session_state:
 # Initialize gamification once profile exists
 init_gamification(profile=st.session_state.profile)
 
-# ---------------- KB + Embeddings + Chain ----------------
+# ---------------- Knowledge Base ----------------
 def read_kb():
     p = "data.txt"
     if os.path.exists(p):
         return open(p, "r", encoding="utf-8").read()
     return "General fitness knowledge only."
 
-@st.cache_resource(show_spinner=False)
+# ---------------- TF-IDF Retriever ----------------
+class SimpleEmbedder:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(stop_words="english")
+        self.doc_vectors = None
+        self.docs = []
+
+    def fit(self, documents):
+        self.docs = documents
+        self.doc_vectors = self.vectorizer.fit_transform(documents)
+
+    def query(self, text, top_k=3):
+        if not self.docs:
+            return [], []
+        query_vec = self.vectorizer.transform([text])
+        scores = cosine_similarity(query_vec, self.doc_vectors).flatten()
+        top_idx = scores.argsort()[-top_k:][::-1]
+        return top_idx, scores[top_idx]
+
+def split_into_chunks(text: str, chunk_size=600, overlap=100):
+    """Simple fixed-size splitter to avoid extra deps."""
+    words = text.split()
+    chunks = []
+    i = 0
+    while i < len(words):
+        chunk_words = words[i:i+chunk_size]
+        chunks.append(" ".join(chunk_words))
+        i += max(chunk_size - overlap, 1)
+    return chunks if chunks else [text]
+
 def build_store(text: str):
-    splitter = CharacterTextSplitter(chunk_size=600, chunk_overlap=100)
-    docs = splitter.create_documents([text])
+    chunks = [c.strip() for c in split_into_chunks(text, 180, 30) if c.strip()]
+    embedder = SimpleEmbedder()
+    embedder.fit(chunks)
+    return chunks, embedder
 
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+def retrieve_context(chunks, embedder, query, k=3):
+    idxs, _ = embedder.query(query, top_k=k)
+    return "\n\n---\n\n".join([chunks[i] for i in idxs])
 
-    class LocalEmbedder:
-        def embed_documents(self, texts):
-            return model.encode(texts, show_progress_bar=False).tolist()
-        def embed_query(self, text):
-            return model.encode([text])[0].tolist()
-
-    embeds = LocalEmbedder()
-    # In-memory Chroma (new collection each session)
-    return Chroma.from_documents(docs, embedding=embeds, collection_name=f"fitbot_{st.session_state.session_id}")
-
-@st.cache_resource(show_spinner=False)
+# ---------------- LLM ----------------
 def build_chain(api_key):
     if not api_key:
         return None
@@ -123,10 +143,6 @@ def build_chain(api_key):
         ),
     )
     return LLMChain(llm=llm, prompt=prompt)
-
-def retrieve(store, q: str, k=3):
-    docs = store.as_retriever(search_kwargs={"k": k}).get_relevant_documents(q)
-    return "\n\n---\n\n".join(d.page_content for d in docs)
 
 # ---------------- Top Navbar ----------------
 def top_nav():
@@ -217,11 +233,11 @@ def page_profile():
         time.sleep(0.4)
         st.session_state.page = "Chat"; st.rerun()
 
-def run_query(q: str, store, chain):
+def run_query(q: str, chunks, embedder, chain):
     loading_tips()
     with st.spinner("Generating your personalized response..."):
         start = time.time()
-        context = retrieve(store, q, k=3)
+        context = retrieve_context(chunks, embedder, q, k=3)
         history = "\n".join([f"User: {h['user']}\nAssistant: {h['assistant']}" for h in st.session_state.history[-6:]])
         profile = ", ".join([f"{k}: {v}" for k,v in st.session_state.profile.items()])
         try:
@@ -230,9 +246,7 @@ def run_query(q: str, store, chain):
             ans = "Sorry, I had trouble answering just now. Please try again."
         latency = round(time.time() - start, 2)
 
-    # Store history
     st.session_state.history.append({"user": q, "assistant": ans, "time": latency})
-    # Gamification: small XP per valid chat, record behavior
     gain_xp(5, profile=st.session_state.profile)
     record_query_metrics(q)
     check_all_achievements(st.session_state.profile)
@@ -242,7 +256,7 @@ def run_query(q: str, store, chain):
 def page_chat():
     st.header("💬 FitBot — Your AI Fitness Coach")
     kb_text = read_kb()
-    store = build_store(kb_text)
+    chunks, embedder = build_store(kb_text)
     chain = build_chain(GOOGLE_KEY)
     if not chain:
         st.error("❌ GOOGLE_API_KEY not found in .env")
@@ -254,13 +268,12 @@ def page_chat():
     for i, label in enumerate(faq_list):
         if cols[i].button(label, key=f"faq_{st.session_state.session_id}_{i}"):
             q = ALL_FAQ[label]
-            run_query(q, store, chain)
+            run_query(q, chunks, embedder, chain)
 
     user_q = st.chat_input("Ask anything about workouts, diet, recovery, motivation:")
     if user_q:
-        run_query(user_q, store, chain)
+        run_query(user_q, chunks, embedder, chain)
 
-    # Show recent turns (last 6)
     if st.session_state.history:
         st.markdown("### Recent Q&A")
         for t in reversed(st.session_state.history[-6:]):
@@ -286,6 +299,21 @@ def page_achievements():
     render_achievements_page(profile=st.session_state.profile)
 
 # ---------------- Router ----------------
+def top_nav():
+    st.markdown('<div class="topbar"><div class="navwrap">', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    if c1.button("🏠 Chat", key=f"nav_chat_{st.session_state.session_id}"):
+        st.session_state.page = "Chat"; st.rerun()
+    if c2.button("🧾 History", key=f"nav_hist_{st.session_state.session_id}"):
+        st.session_state.page = "History"; st.rerun()
+    if c3.button("🎯 Challenges", key=f"nav_chal_{st.session_state.session_id}"):
+        st.session_state.page = "Challenges"; st.rerun()
+    if c4.button("🏆 Achievements", key=f"nav_ach_{st.session_state.session_id}"):
+        st.session_state.page = "Achievements"; st.rerun()
+    if c5.button("👤 Profile", key=f"nav_prof_{st.session_state.session_id}"):
+        st.session_state.page = "Profile"; st.rerun()
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
 def render_page():
     if st.session_state.page == "Chat":
         page_chat()
@@ -301,12 +329,10 @@ def render_page():
         st.session_state.page = "Chat"; page_chat()
 
 def main():
-    # Top navigation
-    top_nav()
-    # Route
-    if not st.session_state.profile_submitted and st.session_state.profile.get("name","") == "":
-        # First-time users go to Profile
+    # First-time users go to Profile until they save
+    if not st.session_state.profile.get("name"):
         st.session_state.page = "Profile"
+    top_nav()
     render_page()
 
 if __name__ == "__main__":
