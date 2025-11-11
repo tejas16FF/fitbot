@@ -1,304 +1,351 @@
-# ==========================================================
-#                         FitBot v4.0
-#        Clean, stable, patched build with Chroma + Gemini
-#                Navigation + History + FAQ working
-# ==========================================================
-
+# app.py — FitBot (Desktop bottom nav + Mobile drawer, FAQ fixed, Tip once after profile)
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
-from typing import List, Dict, Any
 
-# ✅ Updated LangChain imports (latest compatible versions)
-from langchain.chains import LLMChain
-from langchain_core.prompts import PromptTemplate
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_google_genai import ChatGoogleGenerativeAI
+# Gamification
+from gamification import (
+    initialize_gamification,
+    update_daily_login,
+    reward_for_chat,
+    update_challenge_progress,
+    render_progress_sidebar_full,
+    render_weekly_challenge_section,
+    show_challenge_popup,
+    save_all_state,
+    reset_progress_file,
+)
 
-# ✅ Load env
-load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+load_dotenv(".env")
+st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 
-# ----------------------------------------------------------
-#   GLOBAL PRESETS
-# ----------------------------------------------------------
-FALLBACK_KB = """
-General Fitness Guidelines:
-- Regular exercise improves cardiovascular health.
-- Balanced diet supports protein, carbs, healthy fats.
-- Hydration: 2–3 litres daily.
-- Sleep: 7–9 hours.
-- Warm-ups reduce injuries.
-- Progressive overload builds muscle.
-- Combine cardio + strength for weight loss.
-"""
+ACCENT = "#0FB38B"
 
-DAILY_TIPS = [
-    "Stay hydrated — water boosts your metabolism!",
-    "Warm up before intense workouts to prevent injury.",
-    "Small progress every day leads to big results.",
-    "Focus on form, not just weights.",
-    "Fuel your body with clean foods.",
-    "Consistency > Motivation.",
-    "Stretch after workouts to improve flexibility.",
-    "Take rest days seriously.",
-    "Track your progress — it's motivating!",
-    "Eat protein with every meal.",
-]
-
-FAQ_QUERIES = {
-    "🏋️ 3-Day Beginner Plan": "Give me a 3-day full-body workout plan.",
-    "🔥 Fat Burn Tips": "How can I burn fat effectively?",
-    "🍎 Post Workout Meal": "What should I eat after a workout?",
-    "💪 Muscle Gain Diet": "What to eat for muscle gain?",
-    "🧘 Recovery Tips": "Tell me recovery tips after intense workout.",
-    "⚡ Motivation": "How do I stay consistent?",
-    "💤 Why Sleep Matters": "Why is sleep important for fitness?",
-    "🚶 Warm-up Ideas": "Give dynamic warm-up exercises.",
-    "🥗 Vegetarian Protein": "List vegetarian high-protein foods.",
-    "🏃 Cardio Routine": "Give me a 20-minute fat-burning cardio plan.",
-}
-
-# ----------------------------------------------------------
-#   SESSION SETUP
-# ----------------------------------------------------------
-if "profile_submitted" not in st.session_state:
-    st.session_state.profile_submitted = False
-
+# -----------------------------
+# Session defaults
+# -----------------------------
 if "profile" not in st.session_state:
     st.session_state.profile = {
         "name": "",
-        "age": "",
-        "weight": "",
-        "gender": "",
-        "goal": "",
-        "level": "",
-        "diet": "",
-        "workout_time": "",
+        "age": 25,
+        "weight": 70,
+        "goal": "General fitness",
+        "level": "Beginner",
+        "diet": "No preference",
     }
-
 if "history" not in st.session_state:
     st.session_state.history = []
+if "page" not in st.session_state:
+    st.session_state.page = "Profile"
+if "session_id" not in st.session_state:
+    st.session_state.session_id = random.randint(1_000_000, 9_999_999)
+if "tip_after_profile" not in st.session_state:
+    st.session_state.tip_after_profile = None
 
-if "nav_page" not in st.session_state:
-    st.session_state.nav_page = "Chat"
+initialize_gamification()
 
-# ----------------------------------------------------------
-#   BUILD VECTORSTORE
-# ----------------------------------------------------------
-@st.cache_resource(show_spinner=False)
-def build_store(text):
-    splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    docs = splitter.create_documents([text])
-    embeds = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return Chroma.from_documents(docs, embeds, collection_name="fitbot_kb")
+# -----------------------------
+# Knowledge base (fallback text)
+# -----------------------------
+DATA_FILE = "data.txt"
+def load_kb():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return f.read()
+    return "Regular exercise improves cardiovascular health and builds muscle strength."
 
+KB_TEXT = load_kb()
 
-# ----------------------------------------------------------
-#   BUILD LLM CHAIN
-# ----------------------------------------------------------
-@st.cache_resource(show_spinner=False)
-def build_llm():
-    if not GOOGLE_API_KEY:
-        st.error("Missing GOOGLE_API_KEY in .env")
-        st.stop()
+def local_lookup_answer(query: str) -> str:
+    q = query.lower()
+    paras = [p.strip() for p in KB_TEXT.split("\n\n") if p.strip()]
+    best, score = "", 0
+    for p in paras:
+        s = sum(1 for w in q.split() if w and w in p.lower())
+        if s > score:
+            score, best = s, p
+    if score == 0:
+        return "Stay consistent with training, eat a balanced diet, hydrate well, and prioritize sleep."
+    return best
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0.3
-    )
+# -----------------------------
+# Navigation — Desktop bottom bar & Mobile drawer
+# -----------------------------
+def nav_render():
+    # CSS to show bottom bar only on >=768px; drawer button on <768px
+    st.markdown(f"""
+    <style>
+      /* Bottom bar (desktop) */
+      .bottom-nav {{
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 999;
+        background: rgba(0,0,0,0.03);
+        backdrop-filter: blur(6px);
+        border-top: 1px solid rgba(0,0,0,0.08);
+        padding: 8px 12px;
+        display: none;
+      }}
+      @media (min-width: 769px) {{
+        .bottom-nav {{ display: block; }}
+        .mobile-hamburger {{ display: none !important; }}
+      }}
+      @media (max-width: 768px) {{
+        .bottom-nav {{ display: none; }}
+        .mobile-hamburger {{ display: block; }}
+      }}
+      .btn-nav {{
+        display:inline-block; margin: 0 6px; padding: 10px 12px;
+        border-radius: 10px; border: 1px solid rgba(0,0,0,0.08);
+        background: white;
+        font-weight: 600; cursor: pointer; text-decoration:none; color:#111;
+      }}
+      .btn-nav.active {{ border-color: {ACCENT}; color: {ACCENT}; }}
+      .mobile-hamburger {{
+        position: fixed; top: 10px; left: 10px; z-index: 1000;
+        background: white; border-radius: 10px; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.08);
+      }}
+      /* Drawer */
+      #drawer {{
+        position: fixed; top: 0; left: 0; bottom: 0; width: 76%;
+        max-width: 300px; background: #fff; z-index: 1200;
+        box-shadow: 2px 0 20px rgba(0,0,0,0.15);
+        transform: translateX(-105%);
+        transition: transform .28s ease-in-out;
+        padding: 16px;
+      }}
+      #drawer.open {{ transform: translateX(0%); }}
+      .drawer-item {{
+        display:block; padding: 12px 8px; margin: 6px 0; font-weight: 700; color: #111; border-radius:10px; border:1px solid rgba(0,0,0,0.06);
+      }}
+    </style>
+    <div class="mobile-hamburger">
+      <button onclick="document.getElementById('drawer').classList.add('open');">☰ Menu</button>
+    </div>
+    <div id="drawer">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <strong style="font-size:18px; color:{ACCENT};">FitBot</strong>
+        <button onclick="document.getElementById('drawer').classList.remove('open');">✖</button>
+      </div>
+      <div style="margin-top:12px;">
+        <form method="get">
+          <button name="nav" value="Chat" class="drawer-item">🏠 Chat</button>
+          <button name="nav" value="History" class="drawer-item">📜 History</button>
+          <button name="nav" value="Challenges" class="drawer-item">🎯 Challenges</button>
+          <button name="nav" value="Progress" class="drawer-item">🏆 Progress</button>
+          <button name="nav" value="Profile" class="drawer-item">⚙️ Profile</button>
+        </form>
+      </div>
+    </div>
+    <div class="bottom-nav">
+      <form method="get" style="text-align:center;">
+        <button name="nav" value="Chat" class="btn-nav {'active' if st.session_state.page=='Chat' else ''}">🏠 Chat</button>
+        <button name="nav" value="History" class="btn-nav {'active' if st.session_state.page=='History' else ''}">📜 History</button>
+        <button name="nav" value="Challenges" class="btn-nav {'active' if st.session_state.page=='Challenges' else ''}">🎯 Challenges</button>
+        <button name="nav" value="Progress" class="btn-nav {'active' if st.session_state.page=='Progress' else ''}">🏆 Progress</button>
+        <button name="nav" value="Profile" class="btn-nav {'active' if st.session_state.page=='Profile' else ''}">⚙️ Profile</button>
+      </form>
+    </div>
+    """, unsafe_allow_html=True)
 
-    template = """
-You are FitBot, a professional, motivating AI fitness coach.
-Use user's profile data to give personalized advice.
-Never mention 'vectorstore', 'context', 'documents'.
+    # Read nav param (works both desktop & drawer) and update page
+    nav_target = st.query_params.get("nav")
+    if nav_target:
+        # prevent unintended jumps; only switch if user clicked
+        st.session_state.page = nav_target
+        # close drawer via small JS
+        st.markdown("<script>const d=document.getElementById('drawer'); if(d){d.classList.remove('open');}</script>", unsafe_allow_html=True)
+        # clear param so back button doesn't keep firing
+        st.query_params.clear()
+        st.rerun()
 
-User Profile:
-{profile}
+# -----------------------------
+# FAQ
+# -----------------------------
+FAQ_QUERIES = {
+    "🏋️ 3-Day Plan": "Give me a 3-day beginner full-body workout plan.",
+    "🥗 Post-Workout Meal": "What should I eat after my workout for recovery?",
+    "💪 Vegetarian Protein": "List high-protein vegetarian foods.",
+    "🔥 Fat Loss Tips": "How can I lose fat safely and sustainably?",
+    "🧘 Quick Yoga": "Give a 10-minute morning yoga stretch routine.",
+    "🚶 Warm-up Ideas": "Suggest dynamic warm-up exercises before a workout.",
+}
 
-Previous Conversation:
-{chat_history}
+def faq_key(i: int, label: str) -> str:
+    return f"faq_{st.session_state.session_id}_{i}_{label.replace(' ','_')}"
 
-Relevant Info:
-{context}
-
-User Question: {question}
-
-Answer politely, clearly, and professionally.
-"""
-    prompt = PromptTemplate(
-        template=template,
-        input_variables=["profile", "chat_history", "context", "question"]
-    )
-
-    chain = LLMChain(llm=llm, prompt=prompt)
-    return chain
-
-
-# ----------------------------------------------------------
-#   RETRIEVAL
-# ----------------------------------------------------------
-def get_context(store, query):
-    docs = store.similarity_search(query, k=3)
-    return "\n".join([d.page_content for d in docs])
-
-
-def get_chat_history():
-    recent = st.session_state.history[-6:]
-    return "\n".join([
-        f"User: {x['user']}\nAssistant: {x['assistant']}"
-        for x in recent
-    ])
-
-
-# ----------------------------------------------------------
-#   Generate answer
-# ----------------------------------------------------------
-def generate_answer(chain, store, query):
-    profile_str = ", ".join(f"{k}: {v}" for k, v in st.session_state.profile.items())
-    ctx = get_context(store, query)
-    hist = get_chat_history()
-
-    return chain.run(
-        profile=profile_str,
-        chat_history=hist,
-        context=ctx,
-        question=query
-    )
-
-
-# ----------------------------------------------------------
-#   UI COMPONENTS
-# ----------------------------------------------------------
-def render_top_nav():
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("💬 Chat", key="top_chat"):
-            st.session_state.nav_page = "Chat"
-    with c2:
-        if st.button("⚡ Challenges", key="top_challenges"):
-            st.session_state.nav_page = "Challenges"
-    with c3:
-        if st.button("📜 History", key="top_history"):
-            st.session_state.nav_page = "History"
-
-
-# ----------------------------------------------------------
-#   Profile Page
-# ----------------------------------------------------------
+# -----------------------------
+# Pages
+# -----------------------------
 def page_profile():
-    st.title("🏋️ FitBot — Profile Setup")
-    st.markdown("### Let's personalize your experience!")
+    st.title("🏋️ Create Your Fitness Profile")
+    st.markdown("Let’s personalize FitBot for you. (No sidebars here; clean start.)")
 
     with st.form("profile_form"):
-        name = st.text_input("Name")
-        age = st.number_input("Age", 10, 80)
-        weight = st.number_input("Weight (kg)", 30, 200)
-        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-        goal = st.selectbox("Fitness Goal", ["Weight loss", "Muscle gain", "Endurance", "General fitness"])
-        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"])
-        diet = st.selectbox("Diet Preference", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"])
-        workout_time = st.selectbox("Preferred Workout Time", ["Morning", "Afternoon", "Evening"])
-
+        name = st.text_input("Name", st.session_state.profile.get("name", ""))
+        age = st.number_input("Age", 10, 80, int(st.session_state.profile.get("age", 25)))
+        weight = st.number_input("Weight (kg)", 30, 200, int(st.session_state.profile.get("weight", 70)))
+        goal = st.selectbox("Primary Goal", ["General fitness", "Weight loss", "Muscle gain", "Endurance"], index=0)
+        level = st.selectbox("Experience Level", ["Beginner", "Intermediate", "Advanced"], index=0)
+        diet = st.selectbox("Diet", ["No preference", "Vegetarian", "Vegan", "Non-vegetarian"], index=0)
         submitted = st.form_submit_button("Save & Continue")
 
-        if submitted:
-            st.session_state.profile = {
-                "name": name,
-                "age": age,
-                "weight": weight,
-                "gender": gender,
-                "goal": goal,
-                "level": level,
-                "diet": diet,
-                "workout_time": workout_time,
-            }
-            st.session_state.profile_submitted = True
-            st.session_state.nav_page = "Chat"
-            st.success("Profile saved successfully!")
-            st.rerun()
+    if submitted:
+        st.session_state.profile.update({
+            "name": name, "age": age, "weight": weight,
+            "goal": goal, "level": level, "diet": diet,
+        })
+        update_daily_login(silent=True)
+        save_all_state()
+        # Tip of the Day — show ONCE after profile submit (Option A)
+        st.session_state.tip_after_profile = random.choice([
+            "Consistency beats intensity — train smart and steady.",
+            "Fuel your body well and your workouts will follow.",
+            "Recovery is training — sleep, hydrate, stretch.",
+        ])
+        st.success("✅ Profile saved. Launching FitBot...")
+        time.sleep(0.7)
+        st.session_state.page = "Chat"
+        st.rerun()
 
-
-# ----------------------------------------------------------
-#   Chat Page
-# ----------------------------------------------------------
 def page_chat():
-    st.title("💬 FitBot – Your AI Fitness Assistant")
-    render_top_nav()
+    st.title("💬 Chat — FitBot")
 
-    store = build_store(FALLBACK_KB)
-    chain = build_llm()
+    # One-time “Tip of the Day” after profile
+    if st.session_state.tip_after_profile:
+        st.info(f"💡 Tip of the Day: {st.session_state.tip_after_profile}")
+        st.session_state.tip_after_profile = None
 
-    # FAQ Buttons
-    st.markdown("### ⚡ Quick Questions")
+    st.markdown("Ask me anything about workouts, diet, or motivation.")
 
-    faq_list = random.sample(list(FAQ_QUERIES.items()), 4)
-    cols = st.columns(4)
+    # FAQ buttons (always work; unique keys)
+    cols = st.columns(3)
+    for i, (label, q) in enumerate(list(FAQ_QUERIES.items())[:6]):
+        if cols[i % 3].button(label, key=faq_key(i, label)):
+            run_query(q)
 
-    for idx, (label, q) in enumerate(faq_list):
-        if cols[idx].button(label, key=f"faq_{idx}_{random.randint(1,9999)}"):
-            with st.spinner("💭 Thinking..."):
-                answer = generate_answer(chain, store, q)
-                st.session_state.history.append({"user": q, "assistant": answer})
-                st.success(answer)
+    # Chat input
+    user_q = st.chat_input("Ask FitBot your question:")
+    if user_q:
+        run_query(user_q)
 
-    # Chat Input
-    user_query = st.chat_input("Ask your fitness question:")
-    if user_query:
-        with st.spinner("💭 Generating answer..."):
-            answer = generate_answer(chain, store, user_query)
-            st.session_state.history.append({"user": user_query, "assistant": answer})
-            st.success(answer)
-
-
-# ----------------------------------------------------------
-#   History Page
-# ----------------------------------------------------------
-def page_history():
-    st.title("📜 Chat History")
-    render_top_nav()
-
+    # Recent
+    st.markdown("### Recent Q&A")
     if not st.session_state.history:
-        st.info("No chat history yet.")
+        st.info("No chats yet.")
+    else:
+        for turn in reversed(st.session_state.history[-6:]):
+            with st.expander(f"Q: {turn['user'][:72]}"):
+                st.markdown(f"**A:** {turn['assistant']}")
+
+def run_query(query: str):
+    # Rotating motivational tip while loading (fades in/out)
+    tips = [
+        "Small steps daily lead to big wins.",
+        "Hydration powers your performance.",
+        "Form first, then intensity.",
+        "Recovery fuels growth.",
+        "Discipline > motivation. Show up.",
+    ]
+    html = f"""
+    <div id="motibox" style="text-align:center; margin:10px 0; padding:10px; border-radius:10px;
+         color:{ACCENT}; background:rgba(15,179,139,.06); font-weight:700; transition:opacity .5s;">
+      💭 {random.choice(tips)}
+    </div>
+    <script>
+      const tips = {tips};
+      let idx = 0;
+      const box = document.getElementById('motibox');
+      function nextTip() {{
+        box.style.opacity = 0;
+        setTimeout(()=>{{ box.innerText = '💭 ' + tips[idx]; box.style.opacity = 1; idx=(idx+1)%tips.length; }}, 350);
+      }}
+      const timer = setInterval(nextTip, 3000);
+      setTimeout(()=>{{ clearInterval(timer); }}, 9000);
+    </script>
+    """
+    ph = st.empty()
+    ph.markdown(html, unsafe_allow_html=True)
+
+    start = time.time()
+    answer = local_lookup_answer(query)
+    latency = round(time.time() - start, 2)
+    ph.empty()
+
+    st.session_state.history.append({"user": query, "assistant": answer, "time": latency})
+    try:
+        reward_for_chat(show_msg=False)
+        update_challenge_progress("chat")
+        save_all_state()
+    except Exception:
+        pass
+    st.success(answer)
+
+def page_history():
+    st.title("📜 History")
+    if not st.session_state.history:
+        st.info("No chats yet.")
         return
+    for i, t in enumerate(reversed(st.session_state.history[-50:])):
+        with st.expander(f"Q {i+1}: {t['user'][:70]}"):
+            st.markdown(f"**Q:** {t['user']}")
+            st.markdown(f"**A:** {t['assistant']}")
+            st.caption(f"Time: {t.get('time')}s")
 
-    for turn in st.session_state.history[::-1]:
-        st.markdown(f"### ❓ {turn['user']}")
-        st.markdown(f"✅ {turn['assistant']}")
-        st.markdown("---")
-
-
-# ----------------------------------------------------------
-#   Challenges Page
-# ----------------------------------------------------------
 def page_challenges():
-    st.title("⚡ Weekly Challenges")
-    render_top_nav()
+    st.title("🎯 Challenges")
+    render_progress_sidebar_full()
+    render_weekly_challenge_section()
+    st.markdown("---")
+    st.markdown("Manual actions (log to progress challenges):")
+    c1, c2, c3 = st.columns(3)
+    if c1.button("Log: Completed a workout (manual)"):
+        update_challenge_progress("manual")
+        save_all_state()
+        st.success("Workout logged — progress updated.")
+    if c2.button("Log: Did a check-in (manual)"):
+        update_challenge_progress("login")
+        save_all_state()
+        st.success("Check-in logged — progress updated.")
+    if c3.button("Claim weekly reward"):
+        gam = st.session_state.gamification
+        if gam.get("challenge_completed"):
+            show_challenge_popup("🎉 Weekly reward already claimed. Great job!")
+        else:
+            st.info("Challenge not complete yet.")
 
-    st.info("Coming Soon — Achievement system under construction.")
+def page_progress():
+    st.title("🏆 Progress")
+    render_progress_sidebar_full()
+    st.markdown("### Badges")
+    badges = st.session_state.gamification.get("badges", [])
+    if not badges:
+        st.info("No badges yet.")
+    else:
+        st.write(", ".join(badges))
 
-
-# ----------------------------------------------------------
-#   NAV ROUTER
-# ----------------------------------------------------------
+# -----------------------------
+# Main
+# -----------------------------
 def main():
-    if not st.session_state.profile_submitted:
+    # Render nav (hidden drawer on mobile, bottom bar on desktop)
+    if st.session_state.page != "Profile":
+        nav_render()
+
+    # Route
+    page = st.session_state.page
+    if page == "Profile":
         page_profile()
-        return
-
-    page = st.session_state.nav_page
-
-    if page == "Chat":
+    elif page == "Chat":
         page_chat()
-    elif page == "Challenges":
-        page_challenges()
     elif page == "History":
         page_history()
+    elif page == "Challenges":
+        page_challenges()
+    elif page == "Progress":
+        page_progress()
+    else:
+        page_chat()
 
-
-main()
+if __name__ == "__main__":
+    main()
