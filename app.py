@@ -91,7 +91,7 @@ def retrieve_relevant_context(query):
 # Gemini LLM
 # ---------------------------------------------
 def ask_gemini(query, context):
-    try
+    try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-pro",
             generation_config={
