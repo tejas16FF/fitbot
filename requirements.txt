@@ -1,17 +1,14 @@
 streamlit>=1.24
 python-dotenv
 
-# LangChain core runtime
-langchain==0.1.20
+# Core LangChain ecosystem
+langchain==0.2.12
+langchain-community==0.2.11
+langchain-google-genai==1.0.3
 
-# Google Gemini via LangChain integration
-langchain-google-genai==2.0.10
-
-# scikit-learn for TF-IDF retriever
+# TF-IDF and ML tools
 scikit-learn>=1.2.0
-
-# Basic numerical utilities
 numpy>=1.24.0
 
-# For Gemini API directly (optional but recommended)
+# Google Gemini API client
 google-generativeai>=0.5.0
