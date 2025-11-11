@@ -35,6 +35,30 @@ from sentence_transformers import SentenceTransformer
 # -----------------------------
 load_dotenv(".env")
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
+# Fully hide Streamlit default UI (menu, header, footer, toolbar)
+hide_streamlit_default = """
+<style>
+/* Hide MainMenu completely */
+#MainMenu {visibility: hidden !important;}
+
+/* Hide Streamlit header (toolbar area) */
+header {visibility: hidden !important; height: 0px !important;}
+
+/* Hide the top-right menu buttons ("Running", "Stop", 3 dots) */
+.stApp > header {display: none !important;}
+
+/* Hide sidebar hamburger menu */
+[data-testid="collapsedControl"] {display: none !important;}
+
+/* Hide Streamlit footer */
+footer {visibility: hidden !important; height: 0px !important;}
+
+/* Hide "Made with Streamlit" footer branding */
+.viewerBadge_container__1QSob {display: none !important;}
+</style>
+"""
+st.markdown(hide_streamlit_default, unsafe_allow_html=True)
+
 
 GOOGLE_KEY = os.getenv("GOOGLE_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_CHAT_MODEL", "gemini-pro")     # "gemini-1.5-pro" also works
