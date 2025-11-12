@@ -1,13 +1,16 @@
-# app.py — FitBot (Gemini 2.5 Pro + Emoji Top Nav + Gamification)
+# app.py — FitBot (Gemini 2.5 Pro + LangChain Community + Emoji Top Nav + Gamification)
 
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
+
+# Modern LangChain Community imports
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 import google.generativeai as genai
 from google.api_core.exceptions import NotFound, PermissionDenied, ResourceExhausted
 
@@ -23,12 +26,12 @@ from gamification import (
 )
 
 # -----------------------------------
-# Streamlit UI setup
+# Streamlit Setup
 # -----------------------------------
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 load_dotenv(".env")
 
-# Hide Streamlit menu, footer, header
+# Hide Streamlit UI chrome
 st.markdown("""
 <style>
 #MainMenu, footer, header {visibility: hidden;}
@@ -88,7 +91,7 @@ def get_kb_context(query):
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def ask_gemini(query: str, context: str = "") -> str:
-    """Ask Gemini 2.5 Pro safely."""
+    """Ask Gemini 2.5 Pro safely with structured fallback."""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-pro",
@@ -103,7 +106,7 @@ def ask_gemini(query: str, context: str = "") -> str:
 
         prompt = f"""
 You are FitBot — a certified AI fitness and nutrition assistant.
-Answer concisely with practical, motivational guidance.
+Provide concise, motivational, and scientifically safe answers.
 
 Context:
 {context}
@@ -113,7 +116,7 @@ User Question:
 """
         resp = model.generate_content(prompt)
 
-        # Safe extraction
+        # safe extraction
         if hasattr(resp, "text") and resp.text:
             return resp.text.strip()
 
@@ -126,15 +129,14 @@ User Question:
                     if txt:
                         return txt
 
-        reason = getattr(
-            resp.candidates[0], "finish_reason", "unknown"
-        ) if getattr(resp, "candidates", None) else "unknown"
+        reason = getattr(resp.candidates[0], "finish_reason", "unknown") \
+            if getattr(resp, "candidates", None) else "unknown"
         return f"⚠️ Gemini 2.5 Pro returned no text (finish_reason={reason})."
 
     except (NotFound, PermissionDenied):
         return "❌ Gemini 2.5 Pro model unavailable for this API key."
     except ResourceExhausted:
-        return "⚠️ Gemini quota exceeded — try again later."
+        return "⚠️ Gemini 2.5 Pro quota exceeded — try again later."
     except Exception as e:
         return f"⚠️ Gemini error: {str(e)}"
 
@@ -217,7 +219,6 @@ def page_profile():
 
 def page_chat():
     st.title("💬 Chat with FitBot")
-
     user_q = st.chat_input("Ask anything about fitness, nutrition or workouts:")
     if user_q:
         with st.spinner("🤖 Thinking..."):
