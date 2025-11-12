@@ -1,19 +1,17 @@
-# app.py — FitBot (Gemini 2.5 Pro + LangChain Community + Emoji Top Nav + Gamification)
+# app.py — FitBot Final (Stable Gemini 2.5 Pro + Fixed Nav + Robust FAQ)
 
 import os
 import time
 import random
 import streamlit as st
 from dotenv import load_dotenv
+import google.generativeai as genai
+from google.api_core.exceptions import NotFound, PermissionDenied, ResourceExhausted
 
-# Modern LangChain community modules
+# LangChain modern modules
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
-# Gemini integration
-import google.generativeai as genai
-from google.api_core.exceptions import NotFound, PermissionDenied, ResourceExhausted
 
 # Gamification
 from gamification import (
@@ -27,12 +25,13 @@ from gamification import (
 )
 
 # -----------------------------------
-# Streamlit setup
+# Setup
 # -----------------------------------
 st.set_page_config(page_title="FitBot", page_icon="💪", layout="wide")
 load_dotenv(".env")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Hide Streamlit menu/footer/sidebar
+# Hide Streamlit default UI
 st.markdown("""
 <style>
 #MainMenu, header, footer {visibility:hidden;}
@@ -61,7 +60,7 @@ if "page" not in st.session_state:
 initialize_gamification()
 
 # -----------------------------------
-# Load Knowledge Base
+# Load Knowledge Base (FAISS + HF)
 # -----------------------------------
 DATA_FILE = "data.txt"
 
@@ -72,7 +71,7 @@ def load_kb_text():
             return f.read()
     return "Exercise regularly, eat balanced meals, and stay hydrated."
 
-@st.cache_resource(show_spinner="📚 Loading fitness knowledge base...")
+@st.cache_resource(show_spinner="📚 Loading fitness data...")
 def build_store(text):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     docs = splitter.split_text(text)
@@ -87,27 +86,24 @@ def get_kb_context(query):
     return "\n".join(d.page_content for d in docs)
 
 # -----------------------------------
-# Gemini 2.5 Pro Integration
+# Gemini 2.5 Pro (Fixed Response Parser)
 # -----------------------------------
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-
 def ask_gemini(query: str, context: str = "") -> str:
-    """Ask Gemini 2.5 Pro safely with friendly fallback handling."""
+    """Ask Gemini 2.5 Pro safely and handle blocked/empty responses."""
     try:
         model = genai.GenerativeModel(
             model_name="gemini-2.5-pro",
             generation_config={
-                "max_output_tokens": 900,
+                "max_output_tokens": 800,
                 "temperature": 0.6,
                 "top_p": 0.9,
-                "top_k": 40,
             },
             safety_settings="block_none"
         )
 
         prompt = f"""
 You are FitBot — a certified AI fitness and nutrition assistant.
-Provide concise, motivational, and scientifically safe answers.
+Provide concise, motivational, and scientifically accurate advice.
 
 Context:
 {context}
@@ -115,38 +111,39 @@ Context:
 User Question:
 {query}
 """
-        resp = model.generate_content(prompt)
+        response = model.generate_content(prompt)
 
-        # ✅ Safe extraction
-        if hasattr(resp, "text") and resp.text:
-            return resp.text.strip()
+        # ✅ Safe text extraction
+        if getattr(response, "text", None):
+            return response.text.strip()
 
-        if getattr(resp, "candidates", None):
-            for c in resp.candidates:
-                if hasattr(c, "content") and getattr(c.content, "parts", None):
+        # Fallback to parts in candidates
+        if getattr(response, "candidates", None):
+            for cand in response.candidates:
+                if hasattr(cand, "content") and getattr(cand.content, "parts", None):
                     text = " ".join(
-                        getattr(p, "text", "") for p in c.content.parts if hasattr(p, "text")
+                        getattr(p, "text", "") for p in cand.content.parts if hasattr(p, "text")
                     ).strip()
                     if text:
                         return text
 
-            reason = getattr(resp.candidates[0], "finish_reason", "unknown")
+            reason = getattr(response.candidates[0], "finish_reason", "unknown")
             if reason == 2:
-                return "⚠️ Gemini filtered this content for safety. Try rephrasing your question."
+                return "⚠️ Gemini blocked this response due to safety filters. Try rephrasing your question."
 
-        return "⚠️ Gemini didn’t return a valid response. Please try again."
+        return "⚠️ Gemini didn’t return a valid response. Try again."
 
     except NotFound:
-        return "❌ Gemini 2.5 Pro model not found. Please verify your API setup."
+        return "❌ Gemini 2.5 Pro not found — check your API key."
     except PermissionDenied:
-        return "🔒 You don’t have access to Gemini 2.5 Pro. Check your billing or permissions."
+        return "🔒 No access to Gemini 2.5 Pro — check billing permissions."
     except ResourceExhausted:
-        return "⚠️ Gemini quota exceeded — try again later."
+        return "⚠️ Gemini quota exceeded. Try again later."
     except Exception as e:
         return f"⚠️ Gemini error: {str(e)}"
 
 # -----------------------------------
-# Top emoji navigation bar
+# Top Navigation Bar
 # -----------------------------------
 def render_top_nav():
     st.markdown(f"""
@@ -181,13 +178,12 @@ def render_top_nav():
     """, unsafe_allow_html=True)
 
     nav_target = st.query_params.get("nav")
-    if nav_target:
+    if nav_target and nav_target != st.session_state.page:
         st.session_state.page = nav_target
-        st.query_params.clear()
         st.rerun()
 
 # -----------------------------------
-# Page definitions
+# Pages
 # -----------------------------------
 def page_profile():
     st.title("⚙️ Create Your Fitness Profile")
@@ -207,23 +203,24 @@ def page_profile():
         })
         update_daily_login(silent=True)
         save_all_state()
+        st.session_state.page = "Chat"
         st.success("✅ Profile saved! Redirecting to Chat...")
         time.sleep(1)
-        st.session_state.page = "Chat"
         st.rerun()
 
 def page_chat():
     st.title("💬 Chat with FitBot")
-    user_q = st.chat_input("Ask anything about fitness, nutrition or workouts:")
+
+    user_q = st.chat_input("Ask anything about fitness or nutrition:")
     if user_q:
         with st.spinner("🤖 Thinking..."):
-            context = get_kb_context(user_q)
-            answer = ask_gemini(user_q, context)
+            ctx = get_kb_context(user_q)
+            ans = ask_gemini(user_q, ctx)
             reward_for_chat()
             update_challenge_progress("chat")
             save_all_state()
-            st.session_state.history.append({"user": user_q, "assistant": answer})
-        st.success(answer)
+            st.session_state.history.append({"user": user_q, "assistant": ans})
+        st.success(ans)
 
     st.markdown("### Quick FAQs")
     faqs = [
@@ -236,7 +233,7 @@ def page_chat():
     ]
     cols = st.columns(3)
     for i, q in enumerate(faqs):
-        if cols[i % 3].button(q, key=f"faq_{i}"):
+        if cols[i % 3].button(q, key=f"faq_{i}_{random.randint(1,10000)}"):
             with st.spinner("🧠 Generating answer..."):
                 ctx = get_kb_context(q)
                 ans = ask_gemini(q, ctx)
@@ -246,22 +243,14 @@ def page_chat():
                 st.session_state.history.append({"user": q, "assistant": ans})
             st.success(ans)
 
-    st.markdown("### Recent Conversations")
-    if not st.session_state.history:
-        st.info("No chats yet.")
-    else:
-        for turn in reversed(st.session_state.history[-6:]):
-            with st.expander(f"Q: {turn['user'][:70]}"):
-                st.markdown(f"**A:** {turn['assistant']}")
-
 def page_history():
-    st.title("📜 Chat History")
+    st.title("📜 History")
     if not st.session_state.history:
         st.info("No chats yet.")
-    else:
-        for t in reversed(st.session_state.history[-50:]):
-            with st.expander(f"Q: {t['user'][:70]}"):
-                st.markdown(f"**A:** {t['assistant']}")
+        return
+    for h in reversed(st.session_state.history[-50:]):
+        with st.expander(f"Q: {h['user'][:70]}"):
+            st.markdown(f"**A:** {h['assistant']}")
 
 def page_challenges():
     st.title("🎯 Weekly Challenges")
@@ -269,13 +258,13 @@ def page_challenges():
     render_weekly_challenge_section()
 
 def page_progress():
-    st.title("🏆 Progress & Badges")
+    st.title("🏆 Progress & Achievements")
     render_progress_sidebar_full()
     badges = st.session_state.gamification.get("badges", [])
     if badges:
-        st.success(", ".join(badges))
+        st.success("Badges: " + ", ".join(badges))
     else:
-        st.info("No badges earned yet.")
+        st.info("No badges yet.")
 
 # -----------------------------------
 # Main
