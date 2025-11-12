@@ -1,8 +1,8 @@
-streamlit>=1.24
+streamlit>=1.32
 python-dotenv
+langchain>=0.2.5
+langchain-community>=0.2.5
 sentence-transformers
 faiss-cpu
-numpy
 google-generativeai
-protobuf>=3.20,<5
-requests
+numpy
