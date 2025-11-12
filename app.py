@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # Modern LangChain Community imports
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 import google.generativeai as genai
 from google.api_core.exceptions import NotFound, PermissionDenied, ResourceExhausted
